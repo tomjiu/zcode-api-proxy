@@ -44,26 +44,35 @@ describe("providers", () => {
 });
 
 describe("models", () => {
-  it("MODELS is non-empty", () => {
-    expect(MODELS.length).toBeGreaterThan(0);
+  it("MODELS contains exactly the 9 pinned coding-plan models", () => {
+    expect(MODELS).toHaveLength(9);
+    const ids = listModelIds();
+    expect(ids).toEqual([
+      "glm-4.5-air", "glm-4.6", "glm-4.6v", "glm-4.7",
+      "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-5.1", "glm-5.2",
+    ]);
   });
 
   it("getModel returns known model glm-4.6", () => {
     const m = getModel("glm-4.6");
     expect(m).toBeDefined();
     expect(m!.id).toBe("glm-4.6");
-    expect(m!.name).toBe("glm-4.6");
-    expect(m!.contextWindow).toBeGreaterThan(0);
+    expect(m!.name).toBe("GLM 4.6");
+    expect(m!.contextWindow).toBe(200_000);
+    expect(m!.maxOutputTokens).toBe(128_000);
   });
 
-  it("getModel returns glm-4.5 with correct fields", () => {
-    const m = getModel("glm-4.5");
+  it("getModel returns glm-4.5-air with correct fields", () => {
+    const m = getModel("glm-4.5-air");
     expect(m).toBeDefined();
-    expect(m!.contextWindow).toBe(131072);
+    expect(m!.contextWindow).toBe(200_000);
+    expect(m!.maxOutputTokens).toBe(128_000);
   });
 
   it("getModel returns undefined for unknown model", () => {
     expect(getModel("gpt-4")).toBeUndefined();
+    expect(getModel("glm-4.5")).toBeUndefined();
+    expect(getModel("codegeex-4")).toBeUndefined();
   });
 
   it("all models have valid id and contextWindow", () => {
@@ -71,7 +80,19 @@ describe("models", () => {
       expect(typeof m.id).toBe("string");
       expect(m.id.length).toBeGreaterThan(0);
       expect(m.contextWindow).toBeGreaterThan(0);
+      expect(m.maxOutputTokens).toBe(128_000);
     }
+  });
+
+  it("all models except glm-5.2 have 200k context", () => {
+    for (const m of MODELS) {
+      if (m.id === "glm-5.2") continue;
+      expect(m.contextWindow).toBe(200_000);
+    }
+  });
+
+  it("glm-5.2 has 1M context", () => {
+    expect(getModel("glm-5.2")!.contextWindow).toBe(1_000_000);
   });
 
   it("listModelIds matches MODELS length", () => {
@@ -81,7 +102,7 @@ describe("models", () => {
   it("includes key GLM models", () => {
     const ids = listModelIds();
     expect(ids).toContain("glm-4.6");
-    expect(ids).toContain("glm-4.5");
-    expect(ids).toContain("codegeex-4");
+    expect(ids).toContain("glm-5.2");
+    expect(ids).toContain("glm-5v-turbo");
   });
 });

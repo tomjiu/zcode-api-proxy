@@ -1,74 +1,27 @@
 /**
- * Model catalog loaded from the reverse-engineered ZCode catalog.
+ * Pinned model catalog for GLM coding plan.
+ *
+ * Hardcoded to the exact models available on the Z.AI / Bigmodel coding-plan
+ * tier. This replaces the previous `_reverse/models_catalog.json` import,
+ * removing that runtime dependency. Update this list when new GLM models are
+ * released or specs change.
+ *
  * @see .omo/plans/zcode-proxy.md Task 3
- * @see _reverse/models_catalog.json
  */
 import type { ModelDef } from "./types.js";
-import catalog from "../../_reverse/models_catalog.json";
 
-/** Raw catalog shape (subset of fields we care about). */
-interface RawModel {
-  id: string;
-  name: string;
-  contextWindow: number;
-  maxOutputTokens?: number;
-  reasoning?: { defaultLevel?: string; levels?: unknown };
-}
-
-interface RawProvider {
-  id: string;
-  name: string;
-  endpoints: { baseURL: string; paths: Record<string, string> };
-  defaultKind: string;
-  models: RawModel[];
-}
-
-interface RawCatalog {
-  schemaVersion: string;
-  providers: RawProvider[];
-}
-
-const RAW = catalog as unknown as RawCatalog;
-
-/**
- * Extract models from the "zai-coding-plan" and "bigmodel-coding-plan" entries.
- * These are the providers that match our proxy use case (coding plan auth).
- * Falls back to "zai" and "bigmodel" if coding-plan variants are absent.
- */
-function extractModels(): ModelDef[] {
-  const seen = new Set<string>();
-  const result: ModelDef[] = [];
-
-  const targetIds = ["zai-coding-plan", "bigmodel-coding-plan", "zai", "bigmodel"];
-
-  for (const targetId of targetIds) {
-    const provider = RAW.providers.find((p) => p.id === targetId);
-    if (!provider) continue;
-
-    for (const m of provider.models) {
-      if (seen.has(m.id)) continue;
-      seen.add(m.id);
-
-      const reasoning =
-        typeof m.reasoning === "object" &&
-        m.reasoning !== null &&
-        typeof (m.reasoning as any).defaultLevel === "string";
-
-      result.push({
-        id: m.id,
-        name: m.name,
-        contextWindow: m.contextWindow,
-        maxOutputTokens: m.maxOutputTokens,
-        reasoning: reasoning || undefined,
-      });
-    }
-  }
-
-  return result;
-}
-
-/** All models available across Z.AI / Bigmodel coding plans. */
-export const MODELS: ModelDef[] = extractModels();
+/** All models available on the GLM coding plan, pinned with verified specs. */
+export const MODELS: ModelDef[] = [
+  { id: "glm-4.5-air", name: "GLM 4.5 Air", contextWindow: 200_000, maxOutputTokens: 128_000, reasoning: true },
+  { id: "glm-4.6", name: "GLM 4.6", contextWindow: 200_000, maxOutputTokens: 128_000, reasoning: true },
+  { id: "glm-4.6v", name: "GLM 4.6V", contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: "glm-4.7", name: "GLM 4.7", contextWindow: 200_000, maxOutputTokens: 128_000, reasoning: true },
+  { id: "glm-5", name: "GLM 5", contextWindow: 200_000, maxOutputTokens: 128_000, reasoning: true },
+  { id: "glm-5-turbo", name: "GLM 5 Turbo", contextWindow: 200_000, maxOutputTokens: 128_000, reasoning: true },
+  { id: "glm-5v-turbo", name: "GLM 5V Turbo", contextWindow: 200_000, maxOutputTokens: 128_000 },
+  { id: "glm-5.1", name: "GLM 5.1", contextWindow: 200_000, maxOutputTokens: 128_000, reasoning: true },
+  { id: "glm-5.2", name: "GLM 5.2", contextWindow: 1_000_000, maxOutputTokens: 128_000, reasoning: true },
+];
 
 /** Look up a model by id. Returns `undefined` for unknown models. */
 export function getModel(id: string): ModelDef | undefined {

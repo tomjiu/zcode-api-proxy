@@ -25,7 +25,7 @@ bun run src/index.ts /path/to/config.yaml
 
 1. Get an API key from [Z.AI](https://z.ai) or [Bigmodel](https://bigmodel.cn)
 2. For Z.AI you need `{apiKey}.{secretKey}` format
-3. For Bigmodel you need `{apiKey}.{secretKey}` format
+3. For Bigmodel you need `{apiKey}` format
 4. Set it in `config.yaml`:
 
 ```yaml
@@ -39,10 +39,10 @@ provider: zai  # or bigmodel
 
 ```bash
 # Z.AI device/poll flow
-bun run src/cli/login.ts --provider zai
+bun run src/index.ts auth login zai
 
 # Bigmodel auth-code flow (via zcode.z.ai proxy)
-bun run src/cli/login.ts --provider bigmodel
+bun run src/index.ts auth login bigmodel
 
 # This will:
 # 1. Print an authorize URL and open your browser
@@ -61,7 +61,7 @@ provider: zai  # or bigmodel
 If you already use the ZCode desktop app, import the API key directly:
 
 ```bash
-bun run src/cli/login.ts --provider bigmodel --import
+bun run src/index.ts auth login bigmodel --import
 ```
 
 ## Endpoints
@@ -129,6 +129,9 @@ curl http://localhost:8080/v1/models \
 | `auth.apiKey` | `ZCODE_API_KEY` | — | Upstream API key |
 | `auth.proxyApiKey` | `ZCODE_PROXY_API_KEY` | — | Client auth key |
 | `provider` | `ZCODE_PROVIDER` | `zai` | Upstream provider |
+| `identity.appVersion` | `ZCODE_APP_VERSION` | `3.1.1` | `User-Agent: ZCode/{version}` |
+| `identity.sourceTitle` | `ZCODE_SOURCE_TITLE` | `cli` | `X-Title: Z Code@{title}` |
+| `identity.refererOrigin` | `ZCODE_REFERER_ORIGIN` | `https://zcode.z.ai` | `HTTP-Referer` URL |
 
 ## Architecture
 
@@ -144,9 +147,16 @@ Route Detection
   /v1/messages        → Anthropic upstream
       │
       ▼
-Auth Header Injection
+Body Transformation (ZCode-equivalent mutations)
+  OpenAI streaming    → inject stream_options.include_usage
+  Anthropic           → add cache_control to last user message
+  Anthropic + OAuth   → inject metadata.user_id
+      │
+      ▼
+Auth + Identity Header Injection
   OpenAI:    Authorization: Bearer {credential}
   Anthropic: x-api-key: {credential} + anthropic-version
+  Both:      User-Agent: ZCode/{version} + X-ZCode-* + trace headers
       │
       ▼
 Upstream Forward (Bun.fetch) → Stream response back
@@ -167,12 +177,21 @@ bun run src/index.ts config.yaml
 
 ## Available Models
 
-The proxy supports all GLM models from the Z.AI / Bigmodel catalog:
-- glm-5.1, glm-5, glm-5-turbo
-- glm-4.7, glm-4.7-flash, glm-4.7-flashx
-- glm-4.6, glm-4.5, glm-4.5-air
-- codegeex-4, charglm-4, emohaa
-- And more (see `/v1/models` endpoint)
+The proxy lists these models on `GET /v1/models` (pinned to the GLM coding-plan tier):
+
+| Model | Context | Max Output |
+|-------|---------|------------|
+| `glm-4.5-air` | 200K | 128K |
+| `glm-4.6` | 200K | 128K |
+| `glm-4.6v` | 200K | 128K |
+| `glm-4.7` | 200K | 128K |
+| `glm-5` | 200K | 128K |
+| `glm-5-turbo` | 200K | 128K |
+| `glm-5v-turbo` | 200K | 128K |
+| `glm-5.1` | 200K | 128K |
+| `glm-5.2` | 1M | 128K |
+
+Requests for models not in this list are still forwarded upstream — the listing is informational, not a gate.
 
 ## License
 

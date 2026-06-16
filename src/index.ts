@@ -15,7 +15,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const VERSION = "1.0.0";
+const VERSION = "1.3.0";
 
 main();
 
