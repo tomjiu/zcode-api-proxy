@@ -4,7 +4,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { parse } from "yaml";
-import type { ProxyConfig, ProviderEndpoints } from "./types.js";
+import type { ProxyConfig, ProviderEndpoints, ProxyIdentity } from "./types.js";
 
 /** Environment variable keys that override YAML values. */
 const ENV = {
@@ -12,6 +12,9 @@ const ENV = {
   PROXY_API_KEY: "ZCODE_PROXY_API_KEY",
   PROVIDER: "ZCODE_PROVIDER",
   API_KEY: "ZCODE_API_KEY",
+  APP_VERSION: "ZCODE_APP_VERSION",
+  SOURCE_TITLE: "ZCODE_SOURCE_TITLE",
+  REFERER_ORIGIN: "ZCODE_REFERER_ORIGIN",
 } as const;
 
 const DEFAULTS = {
@@ -24,7 +27,13 @@ const DEFAULTS = {
   ZAI_OPENAI_BASE: "https://api.z.ai/api/coding/paas/v4",
   BIGMODEL_ANTHROPIC_BASE: "https://open.bigmodel.cn/api/anthropic",
   BIGMODEL_OPENAI_BASE: "https://open.bigmodel.cn/api/coding/paas/v4",
+  APP_VERSION: "3.1.1",
+  SOURCE_TITLE: "cli",
+  REFERER_ORIGIN: "https://zcode.z.ai",
 };
+
+/** Printable-ASCII gate copied from the ZCode bundle's `rYn` helper. */
+const ASCII_PRINTABLE = /^[\x20-\x7e]+$/;
 
 /**
  * Load and validate proxy configuration from a YAML file, applying env overrides.
@@ -70,6 +79,16 @@ export function loadConfig(path: string): ProxyConfig {
   // --- logging ---
   const logLevel = resolveLogLevel(parsed?.logging?.level);
 
+  // --- identity ---
+  const identity = resolveIdentity({
+    appVersionEnv: process.env[ENV.APP_VERSION],
+    appVersionYaml: parsed?.identity?.appVersion,
+    sourceTitleEnv: process.env[ENV.SOURCE_TITLE],
+    sourceTitleYaml: parsed?.identity?.sourceTitle,
+    refererEnv: process.env[ENV.REFERER_ORIGIN],
+    refererYaml: parsed?.identity?.refererOrigin,
+  });
+
   const config: ProxyConfig = {
     server: { port, host },
     auth: { proxyApiKey, mode, apiKey, oauthCredentialsPath },
@@ -77,6 +96,7 @@ export function loadConfig(path: string): ProxyConfig {
     providers: { zai, bigmodel },
     defaultModel,
     models,
+    identity,
     logging: { level: logLevel },
   };
 
@@ -110,6 +130,29 @@ function resolveLogLevel(raw: unknown): "debug" | "info" | "warn" | "error" {
     return raw as any;
   }
   return DEFAULTS.LOG_LEVEL;
+}
+
+interface IdentityInputs {
+  appVersionEnv?: string;
+  appVersionYaml?: string;
+  sourceTitleEnv?: string;
+  sourceTitleYaml?: string;
+  refererEnv?: string;
+  refererYaml?: string;
+}
+
+/** Resolve identity fields (env > YAML > default). Non-ASCII `appVersion` silently falls back to the default. */
+function resolveIdentity(inp: IdentityInputs): ProxyIdentity {
+  const rawVersion = (inp.appVersionEnv ?? inp.appVersionYaml ?? DEFAULTS.APP_VERSION).trim();
+  const appVersion = ASCII_PRINTABLE.test(rawVersion) ? rawVersion : DEFAULTS.APP_VERSION;
+
+  const sourceTitle = (inp.sourceTitleEnv ?? inp.sourceTitleYaml ?? DEFAULTS.SOURCE_TITLE).trim()
+    || DEFAULTS.SOURCE_TITLE;
+
+  const refererOrigin = (inp.refererEnv ?? inp.refererYaml ?? DEFAULTS.REFERER_ORIGIN).trim()
+    || DEFAULTS.REFERER_ORIGIN;
+
+  return { appVersion, sourceTitle, refererOrigin };
 }
 
 /** Cross-field validation after all fields are resolved. */

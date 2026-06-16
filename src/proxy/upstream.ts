@@ -6,7 +6,9 @@
 import type { Format } from "../translator/types.js";
 import type { ProviderDef } from "../provider/types.js";
 import type { Credential } from "../auth/types.js";
+import type { ProxyIdentity } from "../config/types.js";
 import { credentialString } from "../auth/types.js";
+import { buildIdentityHeaders } from "./identity.js";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const SESSION_ROTATE_MS = 10 * 60 * 1000;
@@ -46,9 +48,10 @@ export function buildUpstreamURL(format: Format, provider: ProviderDef): string 
   return `${provider.openaiBaseURL}/chat/completions`;
 }
 
-export function buildAuthHeaders(format: Format, cred: Credential): Record<string, string> {
+export function buildAuthHeaders(format: Format, cred: Credential, identity: ProxyIdentity): Record<string, string> {
   const credStr = credentialString(cred);
   const base: Record<string, string> = {
+    ...buildIdentityHeaders(identity),
     "x-request-id": crypto.randomUUID(),
     "x-zcode-trace-id": crypto.randomUUID(),
     "x-query-id": `query_${crypto.randomUUID()}`,
@@ -83,9 +86,10 @@ export function buildUpstreamRequest(
   provider: ProviderDef,
   cred: Credential,
   body: string | undefined,
+  identity: ProxyIdentity,
 ): Request {
   const url = buildUpstreamURL(format, provider);
-  const authHeaders = buildAuthHeaders(format, cred);
+  const authHeaders = buildAuthHeaders(format, cred, identity);
   const passthrough = collectPassthroughHeaders(clientReq);
 
   const headers: Record<string, string> = {

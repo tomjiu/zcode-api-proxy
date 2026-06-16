@@ -39,5 +39,18 @@ models:
   - glm-4.6
   - glm-4.5
 
+# Identity headers injected on every upstream request to mimic the ZCode
+# desktop client (User-Agent, X-ZCode-App-Version, X-Title, X-ZCode-Agent,
+# HTTP-Referer). All optional; env vars override YAML, which overrides defaults.
+identity:
+  # Mirrors process.env.ZCODE_APP_VERSION in the ZCode bundle.
+  # Must be printable ASCII; non-conforming values fall back to the default.
+  # Default: "3.1.1" (current ZCode release). Override to match your real client.
+  appVersion: "3.1.1"
+  # X-Title suffix → "Z Code@{sourceTitle}". Default "cli".
+  sourceTitle: "cli"
+  # HTTP-Referer URL. Default "https://zcode.z.ai".
+  refererOrigin: "https://zcode.z.ai"
+
 logging:
   level: info

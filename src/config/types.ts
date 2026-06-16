@@ -28,6 +28,22 @@ export interface AuthConfig {
   oauthCredentialsPath?: string;
 }
 
+/**
+ * Identity headers injected on every upstream request to mimic the ZCode
+ * desktop client. Mirrors the `eYn` builder in the reverse-engineered bundle
+ * (`_reverse/zcode.cjs`); see `_reverse/NOTEPAD.md` "How Credential is Used".
+ *
+ * Resolution: env var (matches ZCode's own convention) → YAML override → default.
+ * `appVersion` must be printable ASCII (`/^[\x20-\x7e]+$/`); non-conforming
+ * values are silently dropped and fall back to the default (current ZCode
+ * release), exactly like `rYn` in the bundle.
+ */
+export interface ProxyIdentity {
+  appVersion: string;
+  sourceTitle: string;
+  refererOrigin: string;
+}
+
 /** Top-level proxy configuration. */
 export interface ProxyConfig {
   server: {
@@ -46,6 +62,11 @@ export interface ProxyConfig {
   defaultModel: string;
   /** Whitelist of allowed model ids. */
   models: string[];
+  /**
+   * Identity headers injected upstream. Always present after `loadConfig`;
+   * defaults mirror the production ZCode desktop client.
+   */
+  identity: ProxyIdentity;
   logging: {
     level: "debug" | "info" | "warn" | "error";
   };

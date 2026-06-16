@@ -7,11 +7,17 @@ import { buildUpstreamRequest, buildUpstreamURL, buildAuthHeaders } from "./upst
 import { proxyRequest, errorResponse } from "./handler.js";
 import { ZAI_PROVIDER, BIGMODEL_PROVIDER } from "../provider/providers.js";
 import type { Credential } from "../auth/types.js";
-import type { ProxyConfig } from "../config/types.js";
+import type { ProxyConfig, ProxyIdentity } from "../config/types.js";
 import { AuthManager } from "../auth/manager.js";
 
 const ZAI_CRED: Credential = { apiKey: "testkey", secret: "testsecret", provider: "zai" };
 const BIGMODEL_CRED: Credential = { apiKey: "bmkey", provider: "bigmodel" };
+
+const IDENTITY: ProxyIdentity = {
+  appVersion: "test-1.0.0",
+  sourceTitle: "cli",
+  refererOrigin: "https://zcode.z.ai",
+};
 
 function makeClientReq(body: string, headers: Record<string, string> = {}): Request {
   return new Request("http://localhost:8080/v1/messages", {
@@ -49,38 +55,48 @@ describe("buildUpstreamURL", () => {
 
 describe("buildAuthHeaders", () => {
   it("injects x-api-key + anthropic-version for Anthropic", () => {
-    const h = buildAuthHeaders("anthropic", ZAI_CRED);
+    const h = buildAuthHeaders("anthropic", ZAI_CRED, IDENTITY);
     expect(h["x-api-key"]).toBe("testkey.testsecret");
     expect(h["anthropic-version"]).toBe("2023-06-01");
   });
 
   it("injects Authorization Bearer for OpenAI", () => {
-    const h = buildAuthHeaders("openai", ZAI_CRED);
+    const h = buildAuthHeaders("openai", ZAI_CRED, IDENTITY);
     expect(h["authorization"]).toBe("Bearer testkey.testsecret");
   });
 
   it("uses apiKey only (no secret) for Bigmodel Anthropic", () => {
-    const h = buildAuthHeaders("anthropic", BIGMODEL_CRED);
+    const h = buildAuthHeaders("anthropic", BIGMODEL_CRED, IDENTITY);
     expect(h["x-api-key"]).toBe("bmkey");
     expect(h["anthropic-version"]).toBe("2023-06-01");
   });
 
   it("uses apiKey only for Bigmodel OpenAI", () => {
-    const h = buildAuthHeaders("openai", BIGMODEL_CRED);
+    const h = buildAuthHeaders("openai", BIGMODEL_CRED, IDENTITY);
     expect(h["authorization"]).toBe("Bearer bmkey");
+  });
+
+  it("injects ZCode identity headers (User-Agent + companions)", () => {
+    const h = buildAuthHeaders("anthropic", ZAI_CRED, IDENTITY);
+    expect(h["User-Agent"]).toBe("ZCode/test-1.0.0");
+    expect(h["X-ZCode-App-Version"]).toBe("test-1.0.0");
+    expect(h["X-Title"]).toBe("Z Code@cli");
+    expect(h["X-ZCode-Agent"]).toBe("glm");
+    expect(h["HTTP-Referer"]).toBe("https://zcode.z.ai");
   });
 });
 
 describe("buildUpstreamRequest", () => {
   it("constructs full Anthropic request with correct URL + headers", async () => {
     const clientReq = makeClientReq('{"model":"glm-4.6","messages":[]}');
-    const upstream = buildUpstreamRequest(clientReq, "anthropic", ZAI_PROVIDER, ZAI_CRED, '{"model":"glm-4.6","messages":[]}');
+    const upstream = buildUpstreamRequest(clientReq, "anthropic", ZAI_PROVIDER, ZAI_CRED, '{"model":"glm-4.6","messages":[]}', IDENTITY);
 
     expect(upstream.url).toBe("https://api.z.ai/api/anthropic/v1/messages");
     expect(upstream.method).toBe("POST");
     expect(upstream.headers.get("x-api-key")).toBe("testkey.testsecret");
     expect(upstream.headers.get("anthropic-version")).toBe("2023-06-01");
     expect(upstream.headers.get("content-type")).toBe("application/json");
+    expect(upstream.headers.get("user-agent")).toBe("ZCode/test-1.0.0");
 
     const body = await upstream.text();
     expect(body).toBe('{"model":"glm-4.6","messages":[]}');
@@ -88,7 +104,7 @@ describe("buildUpstreamRequest", () => {
 
   it("constructs full OpenAI request with correct URL + headers", async () => {
     const clientReq = makeClientReq('{"model":"glm-4.6","messages":[]}');
-    const upstream = buildUpstreamRequest(clientReq, "openai", BIGMODEL_PROVIDER, BIGMODEL_CRED, '{"model":"glm-4.6","messages":[]}');
+    const upstream = buildUpstreamRequest(clientReq, "openai", BIGMODEL_PROVIDER, BIGMODEL_CRED, '{"model":"glm-4.6","messages":[]}', IDENTITY);
 
     expect(upstream.url).toBe("https://open.bigmodel.cn/api/coding/paas/v4/chat/completions");
     expect(upstream.headers.get("authorization")).toBe("Bearer bmkey");
@@ -97,13 +113,13 @@ describe("buildUpstreamRequest", () => {
 
   it("preserves anthropic-beta header from client", () => {
     const clientReq = makeClientReq("{}", { "anthropic-beta": "prompt-caching-2024-07-31" });
-    const upstream = buildUpstreamRequest(clientReq, "anthropic", ZAI_PROVIDER, ZAI_CRED, "{}");
+    const upstream = buildUpstreamRequest(clientReq, "anthropic", ZAI_PROVIDER, ZAI_CRED, "{}", IDENTITY);
     expect(upstream.headers.get("anthropic-beta")).toBe("prompt-caching-2024-07-31");
   });
 
   it("strips client Authorization header (prevents credential leak)", () => {
     const clientReq = makeClientReq("{}", { authorization: "Bearer client-token" });
-    const upstream = buildUpstreamRequest(clientReq, "anthropic", ZAI_PROVIDER, ZAI_CRED, "{}");
+    const upstream = buildUpstreamRequest(clientReq, "anthropic", ZAI_PROVIDER, ZAI_CRED, "{}", IDENTITY);
     // Auth should be the injected credential, NOT the client's
     expect(upstream.headers.get("x-api-key")).toBe("testkey.testsecret");
     expect(upstream.headers.get("authorization")).toBeNull();
@@ -111,7 +127,7 @@ describe("buildUpstreamRequest", () => {
 
   it("strips client x-api-key header", () => {
     const clientReq = makeClientReq("{}", { "x-api-key": "client-key" });
-    const upstream = buildUpstreamRequest(clientReq, "openai", ZAI_PROVIDER, ZAI_CRED, "{}");
+    const upstream = buildUpstreamRequest(clientReq, "openai", ZAI_PROVIDER, ZAI_CRED, "{}", IDENTITY);
     // For OpenAI format, auth goes in Authorization header; client's x-api-key should be stripped
     expect(upstream.headers.get("authorization")).toBe("Bearer testkey.testsecret");
     expect(upstream.headers.get("x-api-key")).toBeNull();
@@ -129,6 +145,7 @@ describe("proxyRequest", () => {
     },
     defaultModel: "glm-4.6",
     models: ["glm-4.6"],
+    identity: IDENTITY,
     logging: { level: "info" },
   };
 

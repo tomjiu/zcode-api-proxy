@@ -20,6 +20,7 @@ function makeConfig(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
     },
     defaultModel: "glm-4.6",
     models: ["glm-4.6"],
+    identity: { appVersion: "test-1.0.0", sourceTitle: "cli", refererOrigin: "https://zcode.z.ai" },
     logging: { level: "info" },
     ...overrides,
   };

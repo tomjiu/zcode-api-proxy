@@ -23,6 +23,9 @@ beforeEach(() => {
   delete process.env.ZCODE_PROXY_API_KEY;
   delete process.env.ZCODE_PROVIDER;
   delete process.env.ZCODE_API_KEY;
+  delete process.env.ZCODE_APP_VERSION;
+  delete process.env.ZCODE_SOURCE_TITLE;
+  delete process.env.ZCODE_REFERER_ORIGIN;
 });
 
 afterEach(() => {
@@ -150,5 +153,58 @@ models:
     const cfg = loadConfig(path);
     expect(cfg.models).toContain("glm-5");
     expect(cfg.models).toContain("glm-4.6");
+  });
+
+  it("identity defaults to current ZCode release when no field provided", () => {
+    const path = writeYaml(`
+auth:
+  mode: apikey
+  apiKey: "abc"
+`);
+    const cfg = loadConfig(path);
+    expect(cfg.identity.appVersion).toBe("3.1.1");
+    expect(cfg.identity.sourceTitle).toBe("cli");
+    expect(cfg.identity.refererOrigin).toBe("https://zcode.z.ai");
+  });
+
+  it("identity: YAML values override defaults", () => {
+    const path = writeYaml(`
+auth:
+  mode: apikey
+  apiKey: "abc"
+identity:
+  appVersion: "9.9.9"
+  sourceTitle: "electron"
+  refererOrigin: "https://example.com"
+`);
+    const cfg = loadConfig(path);
+    expect(cfg.identity.appVersion).toBe("9.9.9");
+    expect(cfg.identity.sourceTitle).toBe("electron");
+    expect(cfg.identity.refererOrigin).toBe("https://example.com");
+  });
+
+  it("identity: ZCODE_APP_VERSION env overrides YAML", () => {
+    const path = writeYaml(`
+auth:
+  mode: apikey
+  apiKey: "abc"
+identity:
+  appVersion: "from-yaml"
+`);
+    process.env.ZCODE_APP_VERSION = "from-env";
+    const cfg = loadConfig(path);
+    expect(cfg.identity.appVersion).toBe("from-env");
+  });
+
+  it("identity: non-ASCII appVersion falls back to default", () => {
+    const path = writeYaml(`
+auth:
+  mode: apikey
+  apiKey: "abc"
+identity:
+  appVersion: "v3.1.1-中文"
+`);
+    const cfg = loadConfig(path);
+    expect(cfg.identity.appVersion).toBe("3.1.1");
   });
 });

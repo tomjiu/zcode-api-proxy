@@ -55,7 +55,7 @@ export async function proxyRequest(
     return errorResponse(503, "credential_unavailable", (err as Error).message);
   }
 
-  const upstreamReq = buildUpstreamRequest(clientReq, format, provider, cred, body);
+  const upstreamReq = buildUpstreamRequest(clientReq, format, provider, cred, body, config.identity);
 
   let upstreamResp: Response;
   try {
