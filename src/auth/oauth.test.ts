@@ -78,6 +78,25 @@ describe("ZaiOAuthClient", () => {
     const result = await client.poll("flow_123", "poll_tok");
     expect(result.status).toBe("ready");
     expect(result.zai?.access_token).toBe("zai_access_123");
+    expect(result.userId).toBe("u1");
+  });
+
+  it("poll returns userId undefined when user object absent", async () => {
+    const mockFetch = (async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/poll/")) {
+        return new Response(zaiEnvelope({
+          status: "ready",
+          token: "jwt",
+          zai: { access_token: "tok" },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("404", { status: 404 });
+    }) as typeof fetch;
+
+    const client = new ZaiOAuthClient(mockFetch);
+    const result = await client.poll("flow_123", "poll_tok");
+    expect(result.userId).toBeUndefined();
   });
 
   it("poll returns failed on 400", async () => {
@@ -139,6 +158,7 @@ describe("ZaiOAuthClient", () => {
           status: "ready",
           token: "jwt",
           zai: { access_token: "resolved_token" },
+          user: { user_id: "user_42" },
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response("404", { status: 404 });
@@ -149,6 +169,7 @@ describe("ZaiOAuthClient", () => {
     const result = await client.waitForAuth(init);
     expect(result.accessToken).toBe("resolved_token");
     expect(result.provider).toBe("zai");
+    expect(result.userId).toBe("user_42");
   });
 
   it("waitForAuth calls onAuthorizeUrl callback", async () => {

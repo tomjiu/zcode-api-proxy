@@ -7,6 +7,7 @@ import type { ProxyConfig } from "../config/types.js";
 import type { AuthManager } from "../auth/manager.js";
 import { getProvider } from "../provider/providers.js";
 import { buildUpstreamRequest } from "./upstream.js";
+import { transformRequestBody } from "./body-transformer.js";
 
 /** Options for the proxy handler. */
 export interface ProxyHandlerOptions {
@@ -55,7 +56,8 @@ export async function proxyRequest(
     return errorResponse(503, "credential_unavailable", (err as Error).message);
   }
 
-  const upstreamReq = buildUpstreamRequest(clientReq, format, provider, cred, body, config.identity);
+  const transformedBody = transformRequestBody(body, { format, userId: cred.userId });
+  const upstreamReq = buildUpstreamRequest(clientReq, format, provider, cred, transformedBody, config.identity);
 
   let upstreamResp: Response;
   try {

@@ -121,6 +121,7 @@ export class KeyResolver {
   async resolveCodingPlanCredential(
     accessToken: string,
     provider: ProviderId,
+    userId?: string,
   ): Promise<Credential> {
     if (provider === "zai") {
       const bizToken = await this.resolveZaiBizToken(accessToken);
@@ -134,7 +135,7 @@ export class KeyResolver {
         secret = await this.getSecretKey(host, authorization, orgId, projectId, apiKey);
       } catch { /* credential will be apiKey-only */ }
 
-      return { apiKey, secret: secret || undefined, provider: "zai" };
+      return { apiKey, secret: secret || undefined, provider: "zai", userId };
     }
 
     const host = "https://bigmodel.cn";
@@ -149,6 +150,6 @@ export class KeyResolver {
       if (secret) fullKey = `${apiKey}.${secret}`;
     } catch { /* use apiKey only */ }
 
-    return { apiKey: fullKey, provider: "bigmodel" };
+    return { apiKey: fullKey, provider: "bigmodel", userId };
   }
 }

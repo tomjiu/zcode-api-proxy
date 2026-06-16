@@ -129,15 +129,16 @@ async function authLogin(args: string[]): Promise<void> {
   if (importMode) {
     cred = importFromZCodeConfig(provider);
   } else {
-    const accessToken = await runOAuth(provider);
+    const { accessToken, userId } = await runOAuth(provider);
     console.log("\nResolving API key...");
     const resolver = new KeyResolver();
-    cred = await resolver.resolveCodingPlanCredential(accessToken, provider);
+    cred = await resolver.resolveCodingPlanCredential(accessToken, provider, userId);
   }
 
   await saveCredential(cred);
   console.log(`\nLogged in as ${provider}.`);
   console.log(`  API Key: ${cred.apiKey.substring(0, 12)}...`);
+  if (cred.userId) console.log(`  User ID: ${cred.userId}`);
   console.log(`  Stored:  ${getStorePath()}`);
 }
 
@@ -162,7 +163,7 @@ async function authStatus(): Promise<void> {
   console.log(`  Store:   ${getStorePath()}`);
 }
 
-async function runOAuth(provider: ProviderId): Promise<string> {
+async function runOAuth(provider: ProviderId): Promise<{ accessToken: string; userId?: string }> {
   if (provider === "bigmodel") {
     const oauth = new BigmodelOAuthClient();
     const result = await oauth.authorize((url) => {
@@ -171,7 +172,7 @@ async function runOAuth(provider: ProviderId): Promise<string> {
       console.log("Waiting for authorization... (expires in 300s)\n");
       openBrowser(url);
     });
-    return result.accessToken;
+    return { accessToken: result.accessToken, userId: result.userId };
   }
 
   const oauth = new ZaiOAuthClient();
@@ -184,7 +185,7 @@ async function runOAuth(provider: ProviderId): Promise<string> {
   openBrowser(init.authorizeUrl);
 
   const result = await oauth.waitForAuth(init);
-  return result.accessToken;
+  return { accessToken: result.accessToken, userId: result.userId };
 }
 
 function importFromZCodeConfig(provider: ProviderId): Credential {

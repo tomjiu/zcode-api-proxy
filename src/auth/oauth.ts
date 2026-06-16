@@ -32,6 +32,8 @@ export interface OAuthInitResponse {
 export interface OAuthResult {
   accessToken: string;
   provider: ProviderId;
+  /** Upstream user identifier, when the OAuth response included one. Passed through to `metadata.user_id` on Anthropic-format requests. */
+  userId?: string;
 }
 
 export type FetchFn = typeof fetch;
@@ -137,6 +139,7 @@ export class ZaiOAuthClient {
     status: "pending" | "ready" | "failed";
     token?: string;
     zai?: { access_token?: string };
+    userId?: string;
   }> {
     const resp = await this.fetchImpl(
       `${ZCODE_OAUTH_BASE}/oauth/cli/poll/${encodeURIComponent(flowId)}`,
@@ -169,10 +172,12 @@ export class ZaiOAuthClient {
       return { status };
     }
     if (status === "ready") {
+      const user = data.user as { user_id?: string } | undefined;
       return {
         status: "ready",
         token: data.token as string | undefined,
         zai: data.zai as { access_token?: string } | undefined,
+        userId: typeof user?.user_id === "string" ? user.user_id : undefined,
       };
     }
 
@@ -197,7 +202,7 @@ export class ZaiOAuthClient {
         if (!accessToken || typeof accessToken !== "string") {
           throw new Error("OAuth ready but no access_token in response");
         }
-        return { accessToken, provider: "zai" };
+        return { accessToken, provider: "zai", userId: result.userId };
       }
       if (result.status === "failed") {
         throw new Error("Authorization failed. Please retry login.");
@@ -335,8 +340,14 @@ export class BigmodelOAuthClient {
   /**
    * Exchange auth code via zcode.z.ai proxy.
    * The ZCode server holds the appSecret and performs the real Bigmodel exchange.
+   * Returns `{ accessToken, userId }` — userId is captured from the response's
+   * `data.user.user_id` when present.
    */
-  async exchangeCode(authCode: string, redirectUri: string, state: string): Promise<string> {
+  async exchangeCode(
+    authCode: string,
+    redirectUri: string,
+    state: string,
+  ): Promise<{ accessToken: string; userId?: string }> {
     const resp = await this.fetchImpl(ZCODE_TOKEN_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -352,7 +363,7 @@ export class BigmodelOAuthClient {
       code?: number;
       data?: {
         token?: string;
-        user?: unknown;
+        user?: { user_id?: string };
         bigmodel?: { access_token?: string };
       };
       msg?: string;
@@ -369,7 +380,8 @@ export class BigmodelOAuthClient {
     if (!accessToken) {
       throw new Error("Bigmodel token response missing bigmodel.access_token");
     }
-    return accessToken;
+    const userId = raw?.data?.user?.user_id;
+    return { accessToken, userId: typeof userId === "string" ? userId : undefined };
   }
 
   async authorize(
@@ -381,8 +393,8 @@ export class BigmodelOAuthClient {
 
     try {
       const authCode = await this.waitForCallback(timeoutMs);
-      const accessToken = await this.exchangeCode(authCode, callbackUrl, state);
-      return { accessToken, provider: "bigmodel" };
+      const { accessToken, userId } = await this.exchangeCode(authCode, callbackUrl, state);
+      return { accessToken, provider: "bigmodel", userId };
     } finally {
       await this.close();
     }

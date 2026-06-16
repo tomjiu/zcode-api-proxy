@@ -38,10 +38,10 @@ async function main(): Promise<void> {
   if (importMode) {
     cred = importFromZCodeConfig(provider);
   } else {
-    const accessToken = await runOAuthFlow(provider);
+    const { accessToken, userId } = await runOAuthFlow(provider);
     console.log("\nAuthorization received. Resolving API key...");
     const resolver = new KeyResolver();
-    cred = await resolver.resolveCodingPlanCredential(accessToken, provider);
+    cred = await resolver.resolveCodingPlanCredential(accessToken, provider, userId);
   }
 
   await saveCredential(cred);
@@ -49,6 +49,7 @@ async function main(): Promise<void> {
   console.log(`\nCredential saved to: ${getStorePath()}`);
   console.log(`  Provider: ${cred.provider}`);
   console.log(`  API Key: ${cred.apiKey.substring(0, 12)}...`);
+  if (cred.userId) console.log(`  User ID: ${cred.userId}`);
   console.log("\nYou can now start the proxy in oauth mode.");
 }
 
@@ -88,7 +89,7 @@ function importFromZCodeConfig(provider: ProviderId): Credential {
   return { apiKey, provider };
 }
 
-async function runOAuthFlow(provider: ProviderId): Promise<string> {
+async function runOAuthFlow(provider: ProviderId): Promise<{ accessToken: string; userId?: string }> {
   if (provider === "bigmodel") {
     const oauth = new BigmodelOAuthClient();
     const result = await oauth.authorize((url) => {
@@ -97,7 +98,7 @@ async function runOAuthFlow(provider: ProviderId): Promise<string> {
       console.log("Waiting for authorization... (expires in 300s)\n");
       openBrowser(url);
     });
-    return result.accessToken;
+    return { accessToken: result.accessToken, userId: result.userId };
   }
 
   const oauth = new ZaiOAuthClient();
@@ -110,7 +111,7 @@ async function runOAuthFlow(provider: ProviderId): Promise<string> {
   openBrowser(init.authorizeUrl);
 
   const result = await oauth.waitForAuth(init);
-  return result.accessToken;
+  return { accessToken: result.accessToken, userId: result.userId };
 }
 
 function openBrowser(url: string): void {

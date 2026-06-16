@@ -18,6 +18,8 @@ export interface Credential {
   provider: ProviderId;
   /** Unix timestamp (ms) when the credential expires. Present only for OAuth. */
   expiresAt?: number;
+  /** Upstream user identifier (OAuth only). Injected as `metadata.user_id` on Anthropic-format requests. */
+  userId?: string;
 }
 
 /**
