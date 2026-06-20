@@ -75,11 +75,10 @@ export async function proxyRequest(
   }
 
   const isSSE = upstreamResp.headers.get("content-type")?.includes("text/event-stream") ?? false;
-  const ttfb = headersAt - started;
 
   if (isSSE && upstreamResp.body) {
     const [clientBody, statsBody] = upstreamResp.body.tee();
-    observeStream(reqId, format, meta, upstreamResp.status, ttfb, started, statsBody, upstreamResp.headers.get("content-encoding"));
+    observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, upstreamResp.headers.get("content-encoding"));
     return passthroughResponse(upstreamResp, clientBody);
   }
 
@@ -202,7 +201,6 @@ function observeStream(
   format: Format,
   meta: RequestMeta,
   status: number,
-  ttfb: number,
   requestSentAt: number,
   body: ReadableStream<Uint8Array>,
   contentEncoding: string | null,
@@ -210,6 +208,7 @@ function observeStream(
   const compressed = contentEncoding !== null;
   let tokens = 0;
   let sseBuffer = "";
+  let firstChunkAt = 0;
 
   function parseSse(text: string): void {
     for (const line of text.split("\n")) {
@@ -237,6 +236,7 @@ function observeStream(
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (firstChunkAt === 0) firstChunkAt = Date.now();
         if (!compressed) {
           sseBuffer += decoder.decode(value, { stream: true });
           const idx = sseBuffer.lastIndexOf("\n");
@@ -249,8 +249,9 @@ function observeStream(
       if (!compressed && sseBuffer) parseSse(sseBuffer);
     } catch {}
     const endAt = Date.now();
+    const ttfbMs = (firstChunkAt > 0 ? firstChunkAt : endAt) - requestSentAt;
     const totalMs = endAt - requestSentAt;
     const avgTps = tokens > 0 && totalMs > 0 ? tokens / (totalMs / 1000) : 0;
-    printRow(reqId, format, meta, status, requestSentAt, requestSentAt + ttfb, tokens, avgTps, endAt);
+    printRow(reqId, format, meta, status, requestSentAt, requestSentAt + ttfbMs, tokens, avgTps, endAt);
   })().catch(() => {});
 }

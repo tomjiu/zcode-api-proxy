@@ -73,6 +73,7 @@ export function startServer(opts: ServerOptions): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     port,
     hostname: host,
+    idleTimeout: 0, // 自用代理：禁用空闲超时，避免长 reasoning 的 LLM 请求被杀
     fetch(req) {
       // Add CORS headers to all responses
       return handler(req).then((resp) => addCorsHeaders(resp));

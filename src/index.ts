@@ -3,6 +3,7 @@
  * @see .omo/plans/zcode-proxy.md Task 7
  */
 import { loadConfig } from "./config/loader.js";
+import { EXAMPLE_CONFIG_YAML } from "./config/template.js";
 import { AuthManager } from "./auth/manager.js";
 import { startServer } from "./server/server.js";
 import { loadCredential, saveCredential, clearCredential, getStorePath } from "./auth/store.js";
@@ -11,11 +12,11 @@ import { KeyResolver } from "./auth/resolver.js";
 import type { Credential } from "./auth/types.js";
 import type { ProviderId } from "./provider/types.js";
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const VERSION = "1.4.0";
+const VERSION = "1.4.5";
 
 main();
 
@@ -63,6 +64,11 @@ Examples:
 
 async function serve(configPath?: string): Promise<void> {
   const path = configPath ?? process.env.ZCODE_PROXY_CONFIG ?? "config.yaml";
+  if (!existsSync(path)) {
+    writeFileSync(path, EXAMPLE_CONFIG_YAML, "utf-8");
+    console.log(`Created ${path} from bundled template.`);
+    console.log(`Edit auth.apiKey, or run: zcode-proxy auth login <zai|bigmodel>\n`);
+  }
   const config = loadConfig(path);
 
   const auth = new AuthManager({
