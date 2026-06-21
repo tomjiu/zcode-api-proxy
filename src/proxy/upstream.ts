@@ -1,5 +1,13 @@
 /**
  * Upstream request builder — constructs the forwarded HTTP request.
+ *
+ * **`format` semantics**: This is the *upstream* format — the format used to
+ * talk to the upstream LLM provider, not the client's inbound format. When
+ * `handler.ts` translates an OpenAI client request to Anthropic upstream in
+ * coding-plan mode, it passes `"anthropic"` here even though the client
+ * originally spoke OpenAI. The route's format is tracked separately in
+ * `handler.ts` for response translation decisions.
+ *
  * @see .omo/plans/zcode-proxy.md Task 6
  * @see _reverse/NOTEPAD.md "How Credential is Used for LLM Calls"
  */
@@ -30,6 +38,13 @@ const STRIP_HEADERS = new Set([
   "x-session-id",
 ]);
 
+/**
+ * Build the upstream URL based on format + plan + provider.
+ *
+ * The `format` parameter is the *upstream* format — callers in handler.ts
+ * pass the format the upstream will receive, which may differ from the
+ * client's inbound format when the proxy is in translation mode.
+ */
 export function buildUpstreamURL(format: Format, provider: ProviderDef, plan: "coding-plan" | "start-plan" = "coding-plan"): string {
   if (plan === "start-plan") {
     return `${STARTPLAN_ANTHROPIC_BASE}/v1/messages`;
@@ -40,6 +55,13 @@ export function buildUpstreamURL(format: Format, provider: ProviderDef, plan: "c
   return `${provider.openaiBaseURL}/chat/completions`;
 }
 
+/**
+ * Build auth + identity + trace headers for the upstream request.
+ *
+ * The `format` parameter is the *upstream* format — selects auth scheme
+ * (`x-api-key` + `anthropic-version` for Anthropic upstream, `Authorization:
+ * Bearer` for OpenAI upstream). See module header for translation semantics.
+ */
 export function buildAuthHeaders(format: Format, cred: Credential, identity: ProxyIdentity, plan: "coding-plan" | "start-plan" = "coding-plan"): Record<string, string> {
   const credStr = plan === "start-plan" && cred.jwt ? cred.jwt : credentialString(cred);
   const base: Record<string, string> = {

@@ -49,18 +49,21 @@ interface TranslationState {
   messageId: string;
   model: string;
   roleSent: boolean;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 function initState(model: string): TranslationState {
-  return { messageId: "", model, roleSent: false };
+  return { messageId: "", model, roleSent: false, inputTokens: 0, outputTokens: 0 };
 }
 
 function makeChunk(
   state: TranslationState,
   delta: Record<string, unknown>,
   finishReason: string | null = null,
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
 ): string {
-  const chunk: OpenAIStreamChunk = {
+  const chunk: OpenAIStreamChunk & { usage?: typeof usage } = {
     id: state.messageId || "chatcmpl-stream",
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1000),
@@ -71,6 +74,7 @@ function makeChunk(
       finish_reason: finishReason as any,
     }],
   };
+  if (usage) chunk.usage = usage;
   return `data: ${JSON.stringify(chunk)}\n\n`;
 }
 
@@ -141,6 +145,7 @@ function translateEvent(state: TranslationState, sse: ParsedSSE): string | null 
       const msg = (data as any).message;
       state.messageId = msg?.id ?? "msg_stream";
       state.model = msg?.model ?? state.model;
+      state.inputTokens = msg?.usage?.input_tokens ?? 0;
       if (!state.roleSent) {
         state.roleSent = true;
         return makeChunk(state, { role: "assistant" });
@@ -154,23 +159,34 @@ function translateEvent(state: TranslationState, sse: ParsedSSE): string | null 
         return makeChunk(state, { content: delta.text });
       }
       if (delta?.type === "input_json_delta") {
-        // Tool use input — accumulate and emit as tool_calls (simplified)
         return null;
       }
       return null;
     }
 
     case "message_delta": {
-      const delta = (data as any).delta;
+      const dataAny = data as any;
+      const delta = dataAny.delta;
+      if (dataAny?.usage?.output_tokens !== undefined) {
+        state.outputTokens = dataAny.usage.output_tokens;
+      }
       if (delta?.stop_reason) {
         const finishReason = mapStopReason(delta.stop_reason);
-        return makeChunk(state, {}, finishReason);
+        return makeChunk(state, {}, finishReason, {
+          prompt_tokens: state.inputTokens,
+          completion_tokens: state.outputTokens,
+          total_tokens: state.inputTokens + state.outputTokens,
+        });
       }
       return null;
     }
 
     case "message_stop": {
-      return makeChunk(state, {}, "stop");
+      return makeChunk(state, {}, "stop", {
+        prompt_tokens: state.inputTokens,
+        completion_tokens: state.outputTokens,
+        total_tokens: state.inputTokens + state.outputTokens,
+      });
     }
 
     case "ping":

@@ -77,6 +77,15 @@ describe("anthropicSseToOpenaiSse", () => {
     expect(output).toContain("data: [DONE]");
   });
 
+  it("emits usage on final chunk from input_tokens + output_tokens", async () => {
+    const input = makeStream(ANTHROPIC_SSE);
+    const output = await collectStream(anthropicSseToOpenaiSse(input, "glm-4.6"));
+    expect(output).toContain('"usage"');
+    expect(output).toContain('"prompt_tokens":10');
+    expect(output).toContain('"completion_tokens":5');
+    expect(output).toContain('"total_tokens":15');
+  });
+
   it("handles max_tokens stop reason", async () => {
     const sse = [
       'event: message_start',

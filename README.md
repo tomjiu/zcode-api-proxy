@@ -142,9 +142,13 @@ Client Request
 Proxy API Key Auth (shared secret)
       │
       ▼
-Route Detection
-  /v1/chat/completions → OpenAI upstream
-  /v1/messages        → Anthropic upstream
+Route Detection + Plan-aware Routing
+  /v1/chat/completions (OpenAI client format)
+    ├─ coding-plan → TRANSLATE to Anthropic → provider's anthropic endpoint
+    └─ start-plan  → TRANSLATE to Anthropic → zcode.z.ai gateway (JWT + captcha)
+  /v1/messages     (Anthropic client format)
+    ├─ coding-plan → passthrough to provider's anthropic endpoint
+    └─ start-plan  → passthrough to zcode.z.ai gateway (JWT + captcha)
       │
       ▼
 Body Transformation (ZCode-equivalent mutations)
@@ -153,13 +157,26 @@ Body Transformation (ZCode-equivalent mutations)
   Anthropic + OAuth   → inject metadata.user_id
       │
       ▼
-Auth + Identity Header Injection
-  OpenAI:    Authorization: Bearer {credential}
-  Anthropic: x-api-key: {credential} + anthropic-version
-  Both:      User-Agent: ZCode/{version} + X-ZCode-* + trace headers
+[Translation mode only] OpenAI request → Anthropic request body
       │
       ▼
-Upstream Forward (Bun.fetch) → Stream response back
+Auth + Identity Header Injection
+  Translation/coding-plan:  x-api-key: {credential} + anthropic-version
+  Translation/start-plan:   Authorization: Bearer {jwt} + anthropic-version
+  Passthrough/start-plan:   Authorization: Bearer {jwt} + anthropic-version
+  Passthrough/coding-plan:  x-api-key: {credential} + anthropic-version
+  Both:                     User-Agent: ZCode/{version} + X-ZCode-* + trace headers
+      │
+      ▼
+Upstream Forward (Bun.fetch)
+  Translation mode:   decompress enabled (proxy reads + translates body)
+  Passthrough:        decompress disabled (raw gzip bytes stream through)
+      │
+      ▼
+Response Handling
+  Passthrough:              raw bytes → client (content-encoding preserved)
+  Translation batch:        Anthropic JSON → OpenAI JSON → gzip if client accepts
+  Translation SSE stream:   Anthropic SSE → OpenAI SSE chunks → client
 ```
 
 ## Development

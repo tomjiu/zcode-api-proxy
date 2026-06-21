@@ -1,5 +1,12 @@
 /**
  * Main proxy handler — routes requests, injects auth, forwards, and streams responses.
+ *
+ * **Translation mode** (OpenAI clients): the proxy translates OpenAI requests
+ * to Anthropic format, forwards to the Anthropic upstream (provider's
+ * anthropic endpoint in coding-plan, or zcode.z.ai gateway in start-plan),
+ * then translates the response back to OpenAI format. Anthropic clients
+ * pass through unchanged in both plans.
+ *
  * @see .omo/plans/zcode-proxy.md Task 6
  */
 import type { Format } from "../translator/types.js";
@@ -9,6 +16,9 @@ import { getProvider } from "../provider/providers.js";
 import { buildUpstreamRequest } from "./upstream.js";
 import { transformRequestBody } from "./body-transformer.js";
 import { detectCaptchaChallenge, getCaptchaToken, invalidateCaptchaToken, RETRY_HEADERS } from "./captcha.js";
+import { translateRequestOpenAIToAnthropic, translateResponseAnthropicToOpenAI } from "../translator/openai-to-anthropic.js";
+import { anthropicSseToOpenaiSse } from "../translator/sse-translator.js";
+import type { OpenAIChatRequest, AnthropicMessagesResponse } from "../translator/types.js";
 
 /** Options for the proxy handler. */
 export interface ProxyHandlerOptions {
@@ -58,14 +68,21 @@ export async function proxyRequest(
     return errorResponse(503, "credential_unavailable", (err as Error).message);
   }
 
-  // start-plan only exposes the Anthropic endpoint (OpenAI path returns 404).
-  // Reject OpenAI-format requests early with a clear message.
-  if (config.plan === "start-plan" && format === "openai") {
-    printRow(reqId, format, meta, 400, started, Date.now(), 0, 0, 0);
-    return errorResponse(400, "unsupported_format", "start-plan only supports the Anthropic API format. Use POST /v1/messages instead of /v1/chat/completions.");
+  // Translation mode: OpenAI client is routed through the Anthropic upstream
+  // (provider's anthropic endpoint in coding-plan, or zcode.z.ai gateway in
+  // start-plan). The request body is translated OpenAI→Anthropic, and the
+  // response is translated back Anthropic→OpenAI.
+  const translateMode = format === "openai";
+  const upstreamFormat: Format = translateMode ? "anthropic" : format;
+
+  let upstreamBody = body;
+  if (translateMode) {
+    const translated = translateOpenAIBody(body);
+    if (translated instanceof Response) return translated;
+    upstreamBody = translated;
   }
 
-  const transformedBody = transformRequestBody(body, { format, userId: cred.userId, startPlan: config.plan === "start-plan" });
+  const transformedBody = transformRequestBody(upstreamBody, { format: upstreamFormat, userId: cred.userId, startPlan: config.plan === "start-plan" });
 
   let captchaHeaders: Record<string, string> | undefined;
   if (config.plan === "start-plan") {
@@ -77,11 +94,11 @@ export async function proxyRequest(
     }
   }
 
-  let upstreamReq = buildUpstreamRequest(clientReq, format, provider, cred, transformedBody, config.identity, config.plan, captchaHeaders);
+  let upstreamReq = buildUpstreamRequest(clientReq, upstreamFormat, provider, cred, transformedBody, config.identity, config.plan, captchaHeaders);
 
   let upstreamResp: Response;
   try {
-    upstreamResp = await fetchImpl(upstreamReq, { decompress: false });
+    upstreamResp = await fetchImpl(upstreamReq, translateMode ? {} : { decompress: false });
   } catch (err) {
     printRow(reqId, format, meta, 502, started, Date.now(), 0, 0, 0);
     return errorResponse(502, "upstream_unreachable", (err as Error).message);
@@ -101,11 +118,11 @@ export async function proxyRequest(
     try {
       const fresh = await getCaptchaToken();
       console.log(`${reqId} captcha re-solved (token ${fresh.verifyParam.length} chars), retrying...`);
-      upstreamReq = buildUpstreamRequest(clientReq, format, provider, cred, transformedBody, config.identity, config.plan, {
+      upstreamReq = buildUpstreamRequest(clientReq, upstreamFormat, provider, cred, transformedBody, config.identity, config.plan, {
         [RETRY_HEADERS.PARAM]: fresh.verifyParam,
         [RETRY_HEADERS.REGION]: fresh.region,
       });
-      upstreamResp = await fetchImpl(upstreamReq, { decompress: false }).catch((err: Error) => {
+      upstreamResp = await fetchImpl(upstreamReq, translateMode ? {} : { decompress: false }).catch((err: Error) => {
         printRow(reqId, format, meta, 502, started, Date.now(), 0, 0, 0);
         return errorResponse(502, "upstream_unreachable", err.message);
       });
@@ -116,6 +133,21 @@ export async function proxyRequest(
   }
 
   const isSSE = upstreamResp.headers.get("content-type")?.includes("text/event-stream") ?? false;
+
+  if (translateMode) {
+    if (!upstreamResp.ok) {
+      const errBody = await upstreamResp.text().catch(() => "");
+      printRow(reqId, format, meta, 502, started, headersAt, 0, 0, 0);
+      return errorResponse(502, "translation_failed", `upstream returned ${upstreamResp.status}: ${errBody.slice(0, 200)}`);
+    }
+    if (isSSE && upstreamResp.body) {
+      const translated = anthropicSseToOpenaiSse(upstreamResp.body, meta.model);
+      const [clientBody, statsBody] = translated.tee();
+      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null);
+      return translatedSseResponse(clientBody);
+    }
+    return await translatedBatchResponse(clientReq, upstreamResp, meta.model, reqId, format, meta, started, headersAt);
+  }
 
   if (isSSE && upstreamResp.body) {
     const [clientBody, statsBody] = upstreamResp.body.tee();
@@ -174,6 +206,99 @@ export function errorResponse(status: number, type: string, message: string): Re
   return new Response(body, {
     status,
     headers: { "content-type": "application/json" },
+  });
+}
+
+/** Translate an OpenAI request body string to Anthropic JSON. Returns error Response on failure. */
+function translateOpenAIBody(body: string | undefined): Response | string | undefined {
+  if (body === undefined || body.length === 0) {
+    return errorResponse(400, "translation_failed", "OpenAI request body is empty; cannot translate.");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch (err) {
+    return errorResponse(400, "translation_failed", `OpenAI request body is not valid JSON: ${(err as Error).message}`);
+  }
+  try {
+    const translated = translateRequestOpenAIToAnthropic(parsed as OpenAIChatRequest);
+    return JSON.stringify(translated);
+  } catch (err) {
+    return errorResponse(400, "translation_failed", `OpenAI→Anthropic translation failed: ${(err as Error).message}`);
+  }
+}
+
+/** True when the client request explicitly accepts gzip (and has not disabled it via q=0). */
+function clientAcceptsGzip(req: Request): boolean {
+  const ae = req.headers.get("accept-encoding");
+  if (!ae) return false;
+  return /\bgzip\b(?!\s*;\s*q=0(?:\.0+)?\s*(?:,|$))/i.test(ae);
+}
+
+/** Build a translated batch (non-streaming) OpenAI response. Gzip if client accepts. */
+async function translatedBatchResponse(
+  clientReq: Request,
+  upstream: Response,
+  model: string,
+  reqId: string,
+  format: Format,
+  meta: RequestMeta,
+  started: number,
+  headersAt: number,
+): Promise<Response> {
+  const raw = await upstream.text();
+  let parsedAnthropic: AnthropicMessagesResponse;
+  try {
+    parsedAnthropic = JSON.parse(raw) as AnthropicMessagesResponse;
+  } catch (err) {
+    printRow(reqId, format, meta, 502, started, headersAt, 0, 0, 0);
+    return errorResponse(502, "translation_failed", `upstream returned non-JSON body: ${(err as Error).message}`);
+  }
+  const openaiResp = translateResponseAnthropicToOpenAI(parsedAnthropic, model);
+  const json = JSON.stringify(openaiResp);
+  const payload = new TextEncoder().encode(json);
+
+  const respHeaders = new Headers();
+  respHeaders.set("content-type", "application/json");
+  for (const h of forwardedUpstreamHeaders()) {
+    const v = upstream.headers.get(h);
+    if (v) respHeaders.set(h, v);
+  }
+
+  if (clientAcceptsGzip(clientReq)) {
+    respHeaders.set("content-encoding", "gzip");
+    printRow(reqId, format, meta, upstream.status, started, headersAt, openaiResp.usage?.completion_tokens ?? 0, 0, 0);
+    return new Response(Bun.gzipSync(payload), {
+      status: upstream.status,
+      headers: respHeaders,
+    });
+  }
+  printRow(reqId, format, meta, upstream.status, started, headersAt, openaiResp.usage?.completion_tokens ?? 0, 0, 0);
+  return new Response(payload, {
+    status: upstream.status,
+    headers: respHeaders,
+  });
+}
+
+function forwardedUpstreamHeaders(): string[] {
+  return [
+    "x-request-id",
+    "anthropic-ratelimit-requests-limit",
+    "anthropic-ratelimit-requests-remaining",
+    "anthropic-ratelimit-requests-reset",
+    "anthropic-ratelimit-tokens-limit",
+    "anthropic-ratelimit-tokens-remaining",
+    "anthropic-ratelimit-tokens-reset",
+  ];
+}
+
+function translatedSseResponse(body: ReadableStream<Uint8Array>): Response {
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    },
   });
 }
 

@@ -35,6 +35,21 @@ function mockUpstream(): typeof fetch {
     }
     const body = await req.text();
     const parsed = JSON.parse(body);
+    if (url.includes("/anthropic/") || url.includes("/v1/messages")) {
+      return new Response(
+        JSON.stringify({
+          id: "msg_test",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "Hello from upstream" }],
+          model: parsed.model ?? "glm-4.6",
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
     return new Response(
       JSON.stringify({
         id: "chatcmpl-test",

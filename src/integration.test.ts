@@ -23,11 +23,22 @@ beforeAll(() => {
   mockUpstreamServer = Bun.serve({
     port: mockPort,
     hostname: "127.0.0.1",
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url);
+      const rawBody = await req.text();
+      let parsed: { stream?: boolean; model?: string } = {};
+      try { parsed = JSON.parse(rawBody); } catch {}
 
       if (url.pathname.includes("/v1/messages")) {
-        const isStreaming = req.headers.get("content-type")?.includes("json");
+        if (parsed.stream) {
+          const sse = [
+            'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_int","model":"glm-4.6"}}\n\n',
+            'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Integration stream"}}\n\n',
+            'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n',
+            'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+          ].join("");
+          return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+        }
         return new Response(JSON.stringify({
           id: "msg_int_test",
           type: "message",
@@ -88,8 +99,8 @@ function authHeader(): Record<string, string> {
   return { "Authorization": "Bearer integration-test-key", "Content-Type": "application/json" };
 }
 
-describe("integration: OpenAI passthrough", () => {
-  it("POST /v1/chat/completions returns 200 with response", async () => {
+describe("integration: OpenAI translation", () => {
+  it("POST /v1/chat/completions returns 200 with translated response", async () => {
     const resp = await fetch(proxyUrl("/v1/chat/completions"), {
       method: "POST",
       headers: authHeader(),
@@ -100,8 +111,41 @@ describe("integration: OpenAI passthrough", () => {
     });
     expect(resp.status).toBe(200);
     const body = await resp.json();
-    expect(body.choices[0].message.content).toBe("OpenAI integration response");
+    expect(body.object).toBe("chat.completion");
+    expect(body.choices[0].message.content).toBe("Integration test response");
     expect(body.model).toBe("glm-4.6");
+  });
+
+  it("returns gzip-encoded body when client sends accept-encoding: gzip", async () => {
+    const resp = await fetch(proxyUrl("/v1/chat/completions"), {
+      method: "POST",
+      headers: { ...authHeader(), "accept-encoding": "gzip" },
+      body: JSON.stringify({ model: "glm-4.6", messages: [{ role: "user", content: "Hi" }] }),
+    });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get("content-encoding")).toBe("gzip");
+    const body = await resp.json();
+    expect(body.object).toBe("chat.completion");
+    expect(body.choices[0].message.content).toBe("Integration test response");
+  });
+});
+
+describe("integration: OpenAI streaming translation", () => {
+  it("translates Anthropic SSE to OpenAI SSE chunks", async () => {
+    const resp = await fetch(proxyUrl("/v1/chat/completions"), {
+      method: "POST",
+      headers: authHeader(),
+      body: JSON.stringify({
+        model: "glm-4.6",
+        messages: [{ role: "user", content: "Stream test" }],
+        stream: true,
+      }),
+    });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get("content-type")).toBe("text/event-stream");
+    const text = await resp.text();
+    expect(text).toContain("chat.completion.chunk");
+    expect(text).toContain("data: [DONE]");
   });
 });
 

@@ -51,6 +51,15 @@ describe("buildUpstreamURL", () => {
       "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
     );
   });
+
+  it("selects Anthropic upstream URL independent of client route (translation mode)", () => {
+    expect(buildUpstreamURL("anthropic", ZAI_PROVIDER)).toBe(
+      "https://api.z.ai/api/anthropic/v1/messages",
+    );
+    expect(buildUpstreamURL("anthropic", BIGMODEL_PROVIDER)).toBe(
+      "https://open.bigmodel.cn/api/anthropic/v1/messages",
+    );
+  });
 });
 
 describe("buildAuthHeaders", () => {
@@ -284,6 +293,324 @@ describe("proxyRequest", () => {
     expect(resp.status).toBe(400);
     const body = await resp.json();
     expect(body.error.type).toBe("invalid_request_error");
+  });
+});
+
+describe("proxyRequest — OpenAI translation mode (coding-plan)", () => {
+  const testConfig: ProxyConfig = {
+    server: { port: 8080, host: "0.0.0.0" },
+    auth: { mode: "apikey", apiKey: "testkey.testsecret" },
+    provider: "zai",
+    plan: "coding-plan",
+    providers: {
+      zai: { anthropicBase: "https://api.z.ai/api/anthropic", openaiBase: "https://api.z.ai/api/coding/paas/v4" },
+      bigmodel: { anthropicBase: "https://open.bigmodel.cn/api/anthropic", openaiBase: "https://open.bigmodel.cn/api/coding/paas/v4" },
+    },
+    defaultModel: "glm-4.6",
+    models: ["glm-4.6"],
+    identity: IDENTITY,
+    logging: { level: "info" },
+  };
+
+  function makeOpenAIReq(body: string, headers: Record<string, string> = {}): Request {
+    return new Request("http://localhost:8080/v1/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body,
+    });
+  }
+
+  const ANTHROPIC_RESPONSE = JSON.stringify({
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    content: [{ type: "text", text: "Translated hello" }],
+    model: "glm-4.6",
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    usage: { input_tokens: 10, output_tokens: 3 },
+  });
+
+  it("routes OpenAI request to Anthropic upstream endpoint", async () => {
+    const fetchMock = mock(async (req: Request): Promise<Response> => {
+      expect(req.url).toBe("https://api.z.ai/api/anthropic/v1/messages");
+      return new Response(ANTHROPIC_RESPONSE, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[{"role":"user","content":"Hi"}]}');
+
+    await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses x-api-key + anthropic-version on translated upstream request", async () => {
+    const fetchMock = mock(async (req: Request): Promise<Response> => {
+      expect(req.headers.get("x-api-key")).toBe("testkey.testsecret");
+      expect(req.headers.get("anthropic-version")).toBe("2023-06-01");
+      expect(req.headers.get("authorization")).toBeNull();
+      return new Response(ANTHROPIC_RESPONSE, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[{"role":"user","content":"Hi"}]}');
+
+    await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+  });
+
+  it("sends translated Anthropic request body upstream (not OpenAI body)", async () => {
+    const fetchMock = mock(async (req: Request): Promise<Response> => {
+      const body = await req.text();
+      const parsed = JSON.parse(body);
+      expect(parsed.messages).toBeDefined();
+      expect(parsed.max_tokens).toBe(4096);
+      expect(parsed.messages[0].role).toBe("user");
+      expect(Array.isArray(parsed.choices)).toBe(false);
+      return new Response(ANTHROPIC_RESPONSE, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[{"role":"user","content":"Hi"}]}');
+
+    await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+  });
+
+  it("translates batch Anthropic response back to OpenAI format", async () => {
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response(ANTHROPIC_RESPONSE, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[{"role":"user","content":"Hi"}]}');
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get("content-type")).toBe("application/json");
+    expect(resp.headers.get("content-encoding")).toBeNull();
+    const body = await resp.json();
+    expect(body.object).toBe("chat.completion");
+    expect(body.choices[0].message.content).toBe("Translated hello");
+    expect(body.choices[0].finish_reason).toBe("stop");
+    expect(body.usage.total_tokens).toBe(13);
+  });
+
+  it("returns gzip-encoded response when client sends accept-encoding: gzip", async () => {
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response(ANTHROPIC_RESPONSE, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[]}', { "accept-encoding": "gzip" });
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.headers.get("content-encoding")).toBe("gzip");
+    const decompressed = Bun.gunzipSync(new Uint8Array(await resp.arrayBuffer()));
+    const body = JSON.parse(new TextDecoder().decode(decompressed));
+    expect(body.object).toBe("chat.completion");
+  });
+
+  it("translates SSE stream from Anthropic format to OpenAI format", async () => {
+    const sseBody = [
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","model":"glm-4.6","usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join("");
+
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response(sseBody, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[],"stream":true}');
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get("content-type")).toBe("text/event-stream");
+
+    const text = await resp.text();
+    expect(text).toContain("chat.completion.chunk");
+    expect(text).toContain('"content":"Hello"');
+    expect(text).toContain('"finish_reason":"stop"');
+    expect(text).toContain("data: [DONE]");
+    expect(text).not.toContain("message_start");
+    expect(text).not.toContain("text_delta");
+    expect(text).toContain('"prompt_tokens":10');
+    expect(text).toContain('"completion_tokens":5');
+    expect(text).toContain('"total_tokens":15');
+  });
+
+  it("forwards x-request-id + anthropic ratelimit headers in translated batch response", async () => {
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response(ANTHROPIC_RESPONSE, {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "x-request-id": "req_abc123",
+          "anthropic-ratelimit-requests-remaining": "99",
+          "anthropic-ratelimit-tokens-reset": "2025-01-01T00:00:00Z",
+        },
+      });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[]}');
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.headers.get("x-request-id")).toBe("req_abc123");
+    expect(resp.headers.get("anthropic-ratelimit-requests-remaining")).toBe("99");
+    expect(resp.headers.get("anthropic-ratelimit-tokens-reset")).toBe("2025-01-01T00:00:00Z");
+  });
+
+  it("accepts gzip when client sends accept-encoding: gzip;q=0.5 (fractional q-value)", async () => {
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response(ANTHROPIC_RESPONSE, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[]}', { "accept-encoding": "gzip;q=0.5" });
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.headers.get("content-encoding")).toBe("gzip");
+  });
+
+  it("rejects gzip when client sends accept-encoding: gzip;q=0 (explicitly disabled)", async () => {
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response(ANTHROPIC_RESPONSE, { status: 200, headers: { "content-type": "application/json" } });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[]}', { "accept-encoding": "gzip;q=0" });
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.headers.get("content-encoding")).toBeNull();
+  });
+
+  it("returns 400 translation_failed when OpenAI request body is malformed JSON", async () => {
+    const fetchMock = mock(async (): Promise<Response> => new Response("ok"));
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq("not json");
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const body = await resp.json();
+    expect(body.error.type).toBe("translation_failed");
+  });
+
+  it("returns 502 translation_failed when upstream returns non-JSON in translation mode", async () => {
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response("not json", { status: 200, headers: { "content-type": "application/json" } });
+    });
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[]}');
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.status).toBe(502);
+    const body = await resp.json();
+    expect(body.error.type).toBe("translation_failed");
+  });
+
+  it("returns 502 translation_failed when upstream returns non-2xx in translation mode", async () => {
+    const fetchMock = mock(async (): Promise<Response> => {
+      return new Response('{"error":"bad request"}', { status: 400, headers: { "content-type": "application/json" } });
+    });
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeOpenAIReq('{"model":"glm-4.6","messages":[]}');
+
+    const resp = await proxyRequest(clientReq, "openai", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.status).toBe(502);
+    const body = await resp.json();
+    expect(body.error.type).toBe("translation_failed");
+  });
+});
+
+describe("proxyRequest — regression: Anthropic passthrough unchanged", () => {
+  const testConfig: ProxyConfig = {
+    server: { port: 8080, host: "0.0.0.0" },
+    auth: { mode: "apikey", apiKey: "testkey.testsecret" },
+    provider: "zai",
+    plan: "coding-plan",
+    providers: {
+      zai: { anthropicBase: "https://api.z.ai/api/anthropic", openaiBase: "https://api.z.ai/api/coding/paas/v4" },
+      bigmodel: { anthropicBase: "https://open.bigmodel.cn/api/anthropic", openaiBase: "https://open.bigmodel.cn/api/coding/paas/v4" },
+    },
+    defaultModel: "glm-4.6",
+    models: ["glm-4.6"],
+    identity: IDENTITY,
+    logging: { level: "info" },
+  };
+
+  it("Anthropic client request uses decompress:false passthrough", async () => {
+    const fetchMock = mock(async (_req: Request, init?: RequestInit & { decompress?: boolean }): Promise<Response> => {
+      expect(init?.decompress).toBe(false);
+      return new Response('{"id":"msg_1","content":[{"type":"text","text":"Hi"}]}', {
+        status: 200,
+        headers: { "content-type": "application/json", "content-encoding": "gzip" },
+      });
+    });
+
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", apiKey: "testkey.testsecret" });
+    const clientReq = makeClientReq('{"model":"glm-4.6","messages":[]}');
+
+    const resp = await proxyRequest(clientReq, "anthropic", { config: testConfig, auth, fetchImpl: fetchMock as any });
+    expect(resp.status).toBe(200);
+    expect(resp.headers.get("content-encoding")).toBe("gzip");
+  });
+
+  it("start-plan OpenAI request translates through zcode.z.ai gateway", async () => {
+    const startPlanConfig: ProxyConfig = {
+      ...testConfig,
+      plan: "start-plan",
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (req: Request | string): Promise<Response> => {
+      const url = typeof req === "string" ? req : req.url;
+      if (url.includes("/client/configs")) {
+        return new Response(JSON.stringify({ data: { configs: { captcha: { enabled: false } } } }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      throw new Error(`unexpected global fetch in test: ${url}`);
+    }) as typeof fetch;
+
+    try {
+      const fetchMock = mock(async (req: Request): Promise<Response> => {
+        expect(req.url).toBe("https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages");
+        expect(req.headers.get("authorization")).toBe("Bearer jwt-mock");
+        const reqBody = JSON.parse(await req.text());
+        expect(reqBody.messages).toBeDefined();
+        expect(reqBody.max_tokens).toBe(4096);
+        return new Response(JSON.stringify({
+          id: "msg_sp",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "start-plan reply" }],
+          model: "glm-4.6",
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 5, output_tokens: 3 },
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      });
+
+      const auth = new AuthManager({ mode: "oauth", provider: "zai" });
+      auth.setOAuthCredential({ apiKey: "dummy", provider: "zai", jwt: "jwt-mock" });
+      const clientReq = new Request("http://localhost:8080/v1/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: '{"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}',
+      });
+
+      const resp = await proxyRequest(clientReq, "openai", { config: startPlanConfig, auth, fetchImpl: fetchMock as any });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(resp.status).toBe(200);
+      expect(resp.headers.get("content-type")).toBe("application/json");
+      const body = await resp.json();
+      expect(body.object).toBe("chat.completion");
+      expect(body.choices[0].message.content).toBe("start-plan reply");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 
