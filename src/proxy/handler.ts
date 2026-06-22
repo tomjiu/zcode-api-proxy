@@ -327,6 +327,15 @@ function peekBody(body: string | undefined): RequestMeta {
 let reqCounter = 0;
 let headerPrinted = false;
 
+/** Format a unix-ms timestamp as local HH:MM:SS in the host's timezone (not UTC). */
+function localTime(ms: number): string {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
 function nextReqId(): string {
   return `#${String(++reqCounter).padStart(3, "0")}`;
 }
@@ -354,7 +363,7 @@ function printRow(
   streamEndAt: number,
 ): void {
   printHeader();
-  const ts = new Date(started).toISOString().slice(11, 19);
+  const ts = localTime(started);
   const tag = format === "anthropic" ? "ANT" : "OAI";
   const mode = meta.stream ? "stream" : "batch";
   const ttfb = `${headersAt - started}ms`;
