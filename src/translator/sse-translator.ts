@@ -46,12 +46,13 @@ interface TranslationState {
   messageId: string;
   model: string;
   roleSent: boolean;
+  finishSent: boolean;
   inputTokens: number;
   outputTokens: number;
 }
 
 function initState(model: string): TranslationState {
-  return { messageId: "", model, roleSent: false, inputTokens: 0, outputTokens: 0 };
+  return { messageId: "", model, roleSent: false, finishSent: false, inputTokens: 0, outputTokens: 0 };
 }
 
 function makeChunk(
@@ -173,6 +174,7 @@ function translateEvent(state: TranslationState, sse: ParsedSSE): string | null 
         state.outputTokens = dataAny.usage.output_tokens;
       }
       if (delta?.stop_reason) {
+        state.finishSent = true;
         const finishReason = mapStopReason(delta.stop_reason);
         return makeChunk(state, {}, finishReason, {
           prompt_tokens: state.inputTokens,
@@ -184,11 +186,17 @@ function translateEvent(state: TranslationState, sse: ParsedSSE): string | null 
     }
 
     case "message_stop": {
-      return makeChunk(state, {}, "stop", {
-        prompt_tokens: state.inputTokens,
-        completion_tokens: state.outputTokens,
-        total_tokens: state.inputTokens + state.outputTokens,
-      });
+      // Only send finish chunk if message_delta didn't already send one.
+      // Duplicate finish chunks confuse some clients (e.g. Cherry Studio).
+      if (!state.finishSent) {
+        state.finishSent = true;
+        return makeChunk(state, {}, "stop", {
+          prompt_tokens: state.inputTokens,
+          completion_tokens: state.outputTokens,
+          total_tokens: state.inputTokens + state.outputTokens,
+        });
+      }
+      return null;
     }
 
     case "ping":
