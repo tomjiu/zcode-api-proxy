@@ -6,6 +6,7 @@ import type { ProxyConfig } from "../config/types.js";
 import type { AuthManager } from "../auth/manager.js";
 import { handleChatCompletions, handleListModels } from "./routes-openai.js";
 import { handleMessages } from "./routes-anthropic.js";
+import { handleResponses } from "./routes-responses.js";
 import { errorResponse } from "../proxy/handler.js";
 import { MODELS } from "../provider/models.js";
 
@@ -84,6 +85,9 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
     // OpenAI routes
     if (path === "/v1/chat/completions" && method === "POST") {
       return handleChatCompletions(req, proxyOpts);
+    }
+    if (path === "/v1/responses" && method === "POST") {
+      return handleResponses(req, proxyOpts);
     }
     if (path === "/v1/models" && method === "GET") {
       return handleListModels();
@@ -375,8 +379,9 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
 
   <div class="section-head"><div class="section-title">API 端点</div></div>
   <div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:16px">
-    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/chat/completions — OpenAI 聊天</div>
-    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/messages — Anthropic 消息</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/chat/completions — OpenAI Chat</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/responses — OpenAI Response</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/messages — Anthropic Messages</div>
     <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">GET</span> /v1/models — 模型列表</div>
     <div style="font-family:monospace;font-size:13px"><span style="color:#4c76b2;font-weight:bold">GET</span> /api/status — API 状态</div>
   </div>
