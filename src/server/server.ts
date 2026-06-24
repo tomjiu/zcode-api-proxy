@@ -269,11 +269,11 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
     <div class="admin-brand-wrap">
       <div class="admin-brand">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-        ZCode Proxy
+        ZCode 代理
       </div>
     </div>
     <div class="admin-nav">
-      <a class="admin-nav-link active" href="/">Dashboard</a>
+      <a class="admin-nav-link active" href="/">仪表盘</a>
     </div>
     <div class="admin-header-right">
       <span class="admin-header-version">v2.0</span>
@@ -284,66 +284,66 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
 <main class="admin-main">
   <div class="page-hd">
     <div>
-      <div class="page-title">Account Pool</div>
-      <div class="page-sub">Multi-account rotation · Auto-switch when quota exhausted · Real-time monitoring</div>
+      <div class="page-title">账号池</div>
+      <div class="page-sub">多账号轮询 · 额度用完自动切换 · 实时用量监控</div>
     </div>
     <div class="page-actions">
-      <span class="live-dot">Live monitoring</span>
+      <span class="live-dot">实时监控中</span>
       <button onclick="refreshAllQuota()" class="page-action-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/></svg>
-        Refresh Quota
+        刷新额度
       </button>
       <button onclick="openAddModal(); switchAddTab('login')" class="page-action-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-        OAuth Login
+        OAuth 登录
       </button>
       <button onclick="openAddModal(); switchAddTab('paste')" class="page-action-btn page-action-btn-primary">
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Add Account
+        添加账号
       </button>
     </div>
   </div>
 
-  <div class="section-head"><div class="section-title">Account Overview</div></div>
+  <div class="section-head"><div class="section-title">账户概览</div></div>
   <div class="stat-grid">
-    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Total Accounts</div><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M4 19a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4"/><circle cx="12" cy="8" r="4"/></svg></span></div><div class="stat-num" id="s-total">${accStats.total}</div></div>
-    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Active</div><span class="stat-icon" style="color:#16a34a"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.9"><circle cx="12" cy="12" r="8"/><path d="m8.5 12 2.4 2.4 4.8-4.8"/></svg></span></div><div class="stat-num" id="s-active" style="color:#16a34a">${accStats.active}</div></div>
-    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Requests</div><span class="stat-icon" style="color:#4c9168"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg></span></div><div class="stat-num" id="s-requests" style="color:#4c9168">${stats.totalRequests}</div></div>
-    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Success Rate</div><span class="stat-icon" style="color:#16a34a"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 2v20M2 12h20"/></svg></span></div><div class="stat-num" id="s-rate" style="color:#16a34a">${stats.successRate}</div></div>
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">账户总数</div><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M4 19a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4"/><circle cx="12" cy="8" r="4"/></svg></span></div><div class="stat-num" id="s-total">${accStats.total}</div></div>
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">正常</div><span class="stat-icon" style="color:#16a34a"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.9"><circle cx="12" cy="12" r="8"/><path d="m8.5 12 2.4 2.4 4.8-4.8"/></svg></span></div><div class="stat-num" id="s-active" style="color:#16a34a">${accStats.active}</div></div>
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">请求数</div><span class="stat-icon" style="color:#4c9168"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg></span></div><div class="stat-num" id="s-requests" style="color:#4c9168">${stats.totalRequests}</div></div>
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">成功率</div><span class="stat-icon" style="color:#16a34a"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 2v20M2 12h20"/></svg></span></div><div class="stat-num" id="s-rate" style="color:#16a34a">${stats.successRate}</div></div>
   </div>
 
   <div class="section-head">
-    <div class="section-title">Account Details <span class="section-count-badge" id="tbl-count">0</span></div>
+    <div class="section-title">账户明细 <span class="section-count-badge" id="tbl-count">0</span></div>
     <div class="section-meta" id="last-updated"></div>
   </div>
 
   <div class="table-card">
     <table>
       <thead><tr>
-        <th>Email</th>
-        <th class="table-center" style="width:80px">Status</th>
-        <th style="min-width:220px">Quota</th>
-        <th class="table-center" style="width:60px">Requests</th>
-        <th class="table-center" style="width:60px">Errors</th>
-        <th style="width:120px">Last Used</th>
-        <th style="width:120px">Actions</th>
+        <th>邮箱</th>
+        <th class="table-center" style="width:80px">状态</th>
+        <th style="min-width:220px">额度</th>
+        <th class="table-center" style="width:60px">请求</th>
+        <th class="table-center" style="width:60px">错误</th>
+        <th style="width:120px">最近使用</th>
+        <th style="width:120px">操作</th>
       </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
   </div>
 
-  <div class="section-head"><div class="section-title">API Endpoints</div></div>
+  <div class="section-head"><div class="section-title">API 端点</div></div>
   <div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:16px">
-    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/chat/completions — OpenAI Chat</div>
-    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/messages — Anthropic Messages</div>
-    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">GET</span> /v1/models — Model List</div>
-    <div style="font-family:monospace;font-size:13px"><span style="color:#4c76b2;font-weight:bold">GET</span> /api/status — API Status</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/chat/completions — OpenAI 聊天</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/messages — Anthropic 消息</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">GET</span> /v1/models — 模型列表</div>
+    <div style="font-family:monospace;font-size:13px"><span style="color:#4c76b2;font-weight:bold">GET</span> /api/status — API 状态</div>
   </div>
 
-  <div class="section-head"><div class="section-title">Recent Requests</div></div>
+  <div class="section-head"><div class="section-title">最近请求</div></div>
   <div class="table-card">
     <table>
-      <thead><tr><th>Time</th><th>Method</th><th>Model</th><th>Duration</th><th>Status</th><th>Error</th></tr></thead>
+      <thead><tr><th>时间</th><th>方法</th><th>模型</th><th>耗时</th><th>状态</th><th>错误</th></tr></thead>
       <tbody>
         ${metrics.recentLogs.slice(0, 20).map(log => `<tr>
           <td>${new Date(log.time).toLocaleTimeString()}</td>
@@ -358,52 +358,52 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
   </div>
 </main>
 
-<!-- Add Account Modal -->
+<!-- 添加账号模态框 -->
 <div class="modal-overlay" id="modal-add">
   <div class="modal">
-    <div class="modal-title">Add Account</div>
+    <div class="modal-title">添加账号</div>
     <div class="filter-bar" style="margin-bottom:16px">
-      <button class="filter-chip active" id="tab-paste" onclick="switchAddTab('paste')">Paste Token</button>
-      <button class="filter-chip" id="tab-login" onclick="switchAddTab('login')">OAuth Login</button>
+      <button class="filter-chip active" id="tab-paste" onclick="switchAddTab('paste')">粘贴凭证</button>
+      <button class="filter-chip" id="tab-login" onclick="switchAddTab('login')">OAuth 登录</button>
     </div>
 
-    <!-- Paste Token -->
+    <!-- 粘贴凭证 -->
     <div id="add-pane-paste">
       <div class="dialog-body">
         <div>
-          <div class="dialog-help">Paste JWT token or API Key</div>
-          <textarea class="input" id="add-jwt" rows="5" placeholder="Paste JWT token here..."></textarea>
+          <div class="dialog-help">粘贴 JWT Token 或 API Key</div>
+          <textarea class="input" id="add-jwt" rows="5" placeholder="在此粘贴 JWT Token..."></textarea>
         </div>
         <div class="dialog-field">
-          <span class="dialog-label">Email</span>
-          <input class="input" id="add-email" placeholder="user@example.com (optional)">
+          <span class="dialog-label">邮箱</span>
+          <input class="input" id="add-email" placeholder="user@example.com（可选）">
         </div>
       </div>
       <div class="dialog-actions">
-        <button onclick="closeModal('modal-add')" class="dialog-btn">Cancel</button>
-        <button onclick="doAddAccount()" class="dialog-btn dialog-btn-primary">Add</button>
+        <button onclick="closeModal('modal-add')" class="dialog-btn">取消</button>
+        <button onclick="doAddAccount()" class="dialog-btn dialog-btn-primary">添加</button>
       </div>
     </div>
 
-    <!-- OAuth Login -->
+    <!-- OAuth 登录 -->
     <div id="add-pane-login" style="display:none">
       <div class="dialog-body">
-        <div class="dialog-help">Login via Z.AI OAuth to get JWT token with Coding Plan quota.</div>
+        <div class="dialog-help">通过 Z.AI OAuth 登录，获取包含 Coding Plan 额度的 JWT Token。</div>
         <div id="login-idle">
-          <button onclick="startOAuthLogin()" id="login-start-btn" class="dialog-btn dialog-btn-primary w-full" style="height:40px">Start Login</button>
+          <button onclick="startOAuthLogin()" id="login-start-btn" class="dialog-btn dialog-btn-primary w-full" style="height:40px">开始登录</button>
         </div>
         <div id="login-active" style="display:none">
-          <div class="dialog-help" style="margin-bottom:6px">Open this URL in browser to authorize:</div>
+          <div class="dialog-help" style="margin-bottom:6px">请在浏览器中打开以下链接完成授权：</div>
           <div style="display:flex;gap:8px;align-items:center">
             <input class="input" id="login-url" readonly style="font-size:12px">
-            <button onclick="copyLoginUrl()" class="dialog-btn">Copy</button>
-            <button onclick="openLoginUrl()" class="dialog-btn dialog-btn-primary">Open</button>
+            <button onclick="copyLoginUrl()" class="dialog-btn">复制</button>
+            <button onclick="openLoginUrl()" class="dialog-btn dialog-btn-primary">打开</button>
           </div>
-          <div class="live-dot" id="login-status" style="margin-top:16px">Waiting for authorization...</div>
+          <div class="live-dot" id="login-status" style="margin-top:16px">等待授权中...</div>
         </div>
       </div>
       <div class="dialog-actions">
-        <button onclick="cancelOAuthLogin()" class="dialog-btn">Close</button>
+        <button onclick="cancelOAuthLogin()" class="dialog-btn">关闭</button>
       </div>
     </div>
   </div>
@@ -432,7 +432,7 @@ function renderAccounts(accounts) {
   document.getElementById('tbl-count').textContent = accounts.length;
   const tbody = document.getElementById('tbody');
   if (!accounts.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No accounts. Click "Add Account" to add one.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无账号，点击右上角「添加账号」添加</td></tr>';
     return;
   }
   tbody.innerHTML = accounts.map(a => {
@@ -468,7 +468,7 @@ function quotaCell(glm52, glm5turbo) {
     const color = glm5turbo.remaining <= 0 ? '#c9c9cf' : (pct < 15 ? '#b0632a' : '#4c9168');
     html += '<div class="quota-row"><span class="quota-row-name">5-Turbo</span><span class="quota-row-track"><span class="quota-row-fill" style="width:' + pct + '%;background:' + color + '"></span></span><span class="quota-row-val">' + fmt(glm5turbo.remaining) + ' / ' + fmt(glm5turbo.total) + '</span></div>';
   }
-  if (!glm52 && !glm5turbo) return '<span class="quota-empty">No quota data</span>';
+  if (!glm52 && !glm5turbo) return '<span class="quota-empty">暂无额度数据</span>';
   return html + '</div>';
 }
 
@@ -489,7 +489,7 @@ function switchAddTab(tab) {
   document.getElementById('add-pane-login').style.display = tab === 'login' ? 'block' : 'none';
 }
 
-// OAuth Login
+// OAuth 登录
 let oauthFlowId = '';
 let oauthPolling = false;
 
@@ -505,10 +505,10 @@ async function startOAuthLogin() {
       oauthPolling = true;
       startOAuthPoll();
     } else {
-      showToast('OAuth init failed: ' + (data.error || 'unknown'), 'error');
+      showToast('OAuth 初始化失败: ' + (data.error || '未知错误'), 'error');
     }
   } catch (e) {
-    showToast('OAuth init failed: ' + e.message, 'error');
+    showToast('OAuth 初始化失败: ' + e.message, 'error');
   }
 }
 
@@ -521,19 +521,19 @@ async function startOAuthPoll() {
       const data = await res.json();
       if (data.ok && data.status === 'ready') {
         oauthPolling = false;
-        showToast('Login successful! Account added.', 'success');
+        showToast('登录成功！账号已添加。', 'success');
         closeModal('modal-add');
         loadAccounts();
         resetOAuthLogin();
         return;
       } else if (data.error) {
         oauthPolling = false;
-        showToast('OAuth error: ' + data.error, 'error');
+        showToast('OAuth 错误: ' + data.error, 'error');
         resetOAuthLogin();
         return;
       }
     } catch (e) {
-      // Network error, continue polling
+      // 网络错误，继续轮询
     }
   }
 }
@@ -554,7 +554,7 @@ function resetOAuthLogin() {
 function copyLoginUrl() {
   const url = document.getElementById('login-url').value;
   navigator.clipboard.writeText(url);
-  showToast('URL copied to clipboard', 'success');
+  showToast('链接已复制到剪贴板', 'success');
 }
 
 function openLoginUrl() {
@@ -565,34 +565,34 @@ function openLoginUrl() {
 async function doAddAccount() {
   const jwt = document.getElementById('add-jwt').value.trim();
   const email = document.getElementById('add-email').value.trim();
-  if (!jwt) return showToast('JWT token required', 'error');
+  if (!jwt) return showToast('请输入 JWT Token', 'error');
   try {
     const res = await fetch('/api/accounts', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ zcode_jwt: jwt, email: email || undefined }) });
     const data = await res.json();
-    if (data.ok) { closeModal('modal-add'); loadAccounts(); showToast('Account added successfully', 'success'); }
-    else { showToast('Error: ' + (data.error || 'unknown'), 'error'); }
-  } catch (e) { showToast('Error: ' + e.message, 'error'); }
+    if (data.ok) { closeModal('modal-add'); loadAccounts(); showToast('账号添加成功', 'success'); }
+    else { showToast('错误: ' + (data.error || '未知错误'), 'error'); }
+  } catch (e) { showToast('错误: ' + e.message, 'error'); }
 }
 
 async function deleteAccount(id) {
-  if (!confirm('Delete this account?')) return;
+  if (!confirm('确认删除此账号？')) return;
   await fetch('/api/accounts/' + id, { method: 'DELETE', headers: apiHeaders });
   loadAccounts();
-  showToast('Account deleted', 'success');
+  showToast('账号已删除', 'success');
 }
 
 async function toggleAccount(id, currentStatus) {
   const newStatus = currentStatus === 'active' ? 'paused' : 'active';
   await fetch('/api/accounts/' + id + '/status', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ status: newStatus }) });
   loadAccounts();
-  showToast('Account status updated', 'success');
+  showToast('账号状态已更新', 'success');
 }
 
 async function refreshAllQuota() {
-  showToast('Refreshing quota...', 'info');
+  showToast('正在刷新额度...', 'info');
   await fetch('/api/accounts/quota', { headers: apiHeaders });
   loadAccounts();
-  showToast('Quota refreshed', 'success');
+  showToast('额度已刷新', 'success');
 }
 
 loadAccounts();
