@@ -12,14 +12,17 @@ const STORE_DIR = join(homedir(), ".zcode-proxy");
 const STORE_FILE = join(STORE_DIR, "credentials.json");
 const ENV_SECRET = "ZCODE_PROXY_CREDENTIAL_SECRET";
 
+/**
+ * Derive a 32-byte AES key from a seed string via cyclic XOR.
+ * If ZCODE_PROXY_CREDENTIAL_SECRET env var is set, it's used as the seed;
+ * Docker uses a fixed seed; local uses homedir-platform-arch.
+ * Same seed → same key, enabling cross-machine credential sharing.
+ */
 function getEncryptionKey(): Buffer {
-  // Docker 环境使用固定密钥
-  if (process.env.DOCKER_CONTAINER) {
-    const key = process.env[ENV_SECRET] ?? "zcode-proxy-docker-default-key!!";
-    return Buffer.from(key.padEnd(32, '!').slice(0, 32));
-  }
-  const seed = process.env[ENV_SECRET] ?? `${homedir()}-${process.platform}-${process.arch}`;
-  // 使用简单的 hash 生成 32 字节密钥
+  const seed = process.env[ENV_SECRET]
+    ?? (process.env.DOCKER_CONTAINER
+      ? "zcode-proxy-docker-default-key"
+      : `${homedir()}-${process.platform}-${process.arch}`);
   const hash = Buffer.alloc(32);
   const seedBytes = Buffer.from(seed);
   for (let i = 0; i < seedBytes.length; i++) {
@@ -42,13 +45,7 @@ async function encrypt(plaintext: string): Promise<string> {
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    getEncryptionKey(),
-    { name: "AES-GCM" },
-    false,
-    ["encrypt", "decrypt"],
-  );
+  const key = getEncryptionKey();
 
   const combined = Buffer.from(ciphertext, "base64");
   const iv = combined.slice(0, 12);
