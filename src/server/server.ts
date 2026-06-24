@@ -154,6 +154,11 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       return handleExportAccounts(req);
     }
 
+    // Batch operations
+    if (path === "/api/accounts/batch" && method === "POST") {
+      return handleBatchAccounts(req);
+    }
+
     return errorResponse(404, "not_found_error", `No route for ${method} ${path}`);
   };
 }
@@ -340,6 +345,34 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
     </table>
   </div>
 
+  <div class="section-head"><div class="section-title">设置</div></div>
+  <div class="settings-card">
+    <div class="settings-row">
+      <label>轮询策略</label>
+      <select class="input" id="rotation-select" onchange="updateRotation()">
+        <option value="least_used">最少使用 - 按请求数最少选择</option>
+        <option value="round_robin">轮询 - 按最后使用时间选择</option>
+        <option value="by_quota">按额度 - 按剩余额度最多选择</option>
+      </select>
+    </div>
+    <div class="settings-row">
+      <label>额度刷新间隔（秒）</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="input" id="refresh-interval" type="number" min="0" style="width:120px">
+        <button class="btn btn-ghost" onclick="updateRefreshInterval()">保存</button>
+      </div>
+      <span class="hint">设为 0 关闭自动刷新</span>
+    </div>
+    <div class="settings-row">
+      <label>限流冷却时间（秒）</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input class="input" id="cooling-seconds" type="number" min="0" style="width:120px">
+        <button class="btn btn-ghost" onclick="updateCoolingSeconds()">保存</button>
+      </div>
+      <span class="hint">429 限流后自动冷却的时间</span>
+    </div>
+  </div>
+
   <div class="section-head"><div class="section-title">API 端点</div></div>
   <div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:16px">
     <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/chat/completions — OpenAI 聊天</div>
@@ -436,6 +469,8 @@ async function loadAccounts() {
   }
 }
 
+const STATUS_LABELS = {active:'正常',paused:'暂停',exhausted:'用完',cooling:'限流',error:'异常'};
+
 function renderAccounts(accounts) {
   document.getElementById('tbl-count').textContent = accounts.length;
   const tbody = document.getElementById('tbody');
@@ -446,19 +481,21 @@ function renderAccounts(accounts) {
   tbody.innerHTML = accounts.map(a => {
     const glm52 = a.quota_details?.find(q => q.model === 'GLM-5.2');
     const glm5turbo = a.quota_details?.find(q => q.model === 'GLM-5-Turbo');
-    const statusClass = a.status === 'active' ? 'active' : (a.status === 'paused' ? 'disabled' : 'invalid');
+    const statusClass = a.status === 'active' ? 'active' : (a.status === 'paused' || a.status === 'cooling' ? 'disabled' : 'invalid');
+    const statusLabel = STATUS_LABELS[a.status] || a.status;
+    const isDisabled = a.status === 'paused' || a.status === 'error';
     return '<tr>' +
       '<td><span class="tok">' + (a.email || a.id.slice(0, 12)) + '</span></td>' +
-      '<td class="table-center"><span class="badge badge-' + statusClass + '">' + a.status + '</span></td>' +
+      '<td class="table-center"><span class="badge badge-' + statusClass + '">' + statusLabel + '</span></td>' +
       '<td>' + quotaCell(glm52, glm5turbo) + '</td>' +
       '<td class="table-center" style="color:#8f8f8f">' + a.requests + '</td>' +
       '<td class="table-center" style="color:#9a9a9a">' + a.errors + '</td>' +
       '<td style="font-size:12px;color:#9a9a9a">' + (a.last_used_at ? new Date(a.last_used_at).toLocaleString() : '—') + '</td>' +
       '<td><div class="row-actions">' +
-        '<button onclick="toggleAccount(\\'' + a.id + '\\',\\'' + a.status + '\\')" class="row-icon-btn" title="' + (a.status === 'active' ? 'Pause' : 'Resume') + '">' +
-          (a.status === 'active' ? '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 15.5 15.5"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.708"/><path d="M3 4v5h5"/></svg>') +
+        '<button onclick="toggleAccount(\\'' + a.id + '\\',\\'' + a.status + '\\')" class="row-icon-btn" title="' + (isDisabled ? '恢复' : '暂停') + '">' +
+          (isDisabled ? '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.708"/><path d="M3 4v5h5"/></svg>' : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 15.5 15.5"/></svg>') +
         '</button>' +
-        '<button onclick="deleteAccount(\\'' + a.id + '\\')" class="row-icon-btn row-icon-danger" title="Delete"><svg viewBox="0 0 24 24"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/></svg></button>' +
+        '<button onclick="deleteAccount(\\'' + a.id + '\\')" class="row-icon-btn row-icon-danger" title="删除"><svg viewBox="0 0 24 24"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/></svg></button>' +
       '</div></td>' +
     '</tr>';
   }).join('');
@@ -603,7 +640,41 @@ async function refreshAllQuota() {
   showToast('额度已刷新', 'success');
 }
 
+// 设置相关
+async function loadSettings() {
+  try {
+    const res = await fetch('/api/settings', { headers: apiHeaders });
+    const data = await res.json();
+    if (data.ok && data.settings) {
+      document.getElementById('rotation-select').value = data.settings.rotation || 'least_used';
+      document.getElementById('refresh-interval').value = data.settings.quota_refresh_interval || 60;
+      document.getElementById('cooling-seconds').value = data.settings.cooling_seconds || 300;
+    }
+  } catch (e) {
+    console.error('Failed to load settings:', e);
+  }
+}
+
+async function updateRotation() {
+  const rotation = document.getElementById('rotation-select').value;
+  await fetch('/api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ rotation }) });
+  showToast('轮询策略已更新', 'success');
+}
+
+async function updateRefreshInterval() {
+  const quota_refresh_interval = parseInt(document.getElementById('refresh-interval').value) || 60;
+  await fetch('/api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ quota_refresh_interval }) });
+  showToast('刷新间隔已更新', 'success');
+}
+
+async function updateCoolingSeconds() {
+  const cooling_seconds = parseInt(document.getElementById('cooling-seconds').value) || 300;
+  await fetch('/api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ cooling_seconds }) });
+  showToast('冷却时间已更新', 'success');
+}
+
 loadAccounts();
+loadSettings();
 setInterval(loadAccounts, 10000);
 </script>
 </body></html>`;
@@ -649,8 +720,13 @@ async function handleUpdateAccountStatus(req: Request, id: string): Promise<Resp
 }
 
 async function handleRefreshQuota(): Promise<Response> {
-  // TODO: implement quota refresh
-  return jsonResponse(200, { ok: true, message: "quota refresh not implemented yet" });
+  try {
+    const { refreshAllQuota } = await import("./account-manager.js");
+    const result = await refreshAllQuota();
+    return jsonResponse(200, { ok: true, ...result });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
 }
 
 function handleGetSettings(): Response {
@@ -825,3 +901,75 @@ async function handleImportAccounts(req: Request): Promise<Response> {
     return jsonResponse(500, { error: (e as Error).message });
   }
 }
+
+// ─── Batch Operations ─────────────────────────────────────────────────────────
+
+async function handleBatchAccounts(req: Request): Promise<Response> {
+  try {
+    const body = await req.json() as any;
+    const { action, ids } = body;
+
+    if (!action || !ids || !Array.isArray(ids)) {
+      return jsonResponse(400, { error: "需要 action 和 ids 参数" });
+    }
+
+    const results: any[] = [];
+
+    switch (action) {
+      case "delete":
+        for (const id of ids) {
+          try {
+            deleteAccount(id);
+            results.push({ id, ok: true });
+          } catch (e) {
+            results.push({ id, ok: false, error: (e as Error).message });
+          }
+        }
+        break;
+
+      case "pause":
+        for (const id of ids) {
+          try {
+            updateAccount(id, { status: "paused" });
+            results.push({ id, ok: true });
+          } catch (e) {
+            results.push({ id, ok: false, error: (e as Error).message });
+          }
+        }
+        break;
+
+      case "activate":
+        for (const id of ids) {
+          try {
+            updateAccount(id, { status: "active", cooling_until: undefined });
+            results.push({ id, ok: true });
+          } catch (e) {
+            results.push({ id, ok: false, error: (e as Error).message });
+          }
+        }
+        break;
+
+      default:
+        return jsonResponse(400, { error: "无效的 action，使用: delete, pause, activate" });
+    }
+
+    const succeeded = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok).length;
+
+    return jsonResponse(200, {
+      ok: true,
+      action,
+      results,
+      summary: { succeeded, failed, total: ids.length },
+    });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
+}
+
+// ─── Start Quota Monitor ──────────────────────────────────────────────────────
+
+import { startQuotaMonitor } from "./account-manager.js";
+
+// 启动定时刷新额度
+startQuotaMonitor();

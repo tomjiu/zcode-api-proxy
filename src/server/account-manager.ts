@@ -1,10 +1,11 @@
 /**
  * Account manager — manages OAuth credentials and quota tracking
- * Migrated from appserver-probe
+ * Migrated from appserver-probe and zcode2api
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { getBalance, activatePlan } from "./oauth.js";
 
 export interface Account {
   id: string;
@@ -13,7 +14,7 @@ export interface Account {
   oauth_access_token?: string;
   user_id?: string;
   label?: string;
-  status: "active" | "paused" | "error";
+  status: "active" | "paused" | "error" | "exhausted" | "cooling";
   plan_expires_at?: number;
   quota_details?: Array<{
     model: string;
@@ -25,6 +26,7 @@ export interface Account {
   errors: number;
   last_used_at?: string;
   last_error?: string;
+  cooling_until?: number;
   created_at: string;
 }
 
@@ -32,6 +34,8 @@ interface Store {
   accounts: Account[];
   settings: {
     rotation: "least_used" | "round_robin" | "by_quota";
+    quota_refresh_interval: number; // seconds, 0 = disabled
+    cooling_seconds: number; // seconds for rate limit cooling
   };
 }
 
@@ -48,8 +52,12 @@ function load(): Store {
     }
   } catch {}
   if (!store) {
-    store = { accounts: [], settings: { rotation: "least_used" } };
+    store = { accounts: [], settings: { rotation: "least_used", quota_refresh_interval: 60, cooling_seconds: 300 } };
   }
+  // 确保 settings 字段完整
+  if (!store.settings) store.settings = { rotation: "least_used", quota_refresh_interval: 60, cooling_seconds: 300 };
+  if (store.settings.quota_refresh_interval === undefined) store.settings.quota_refresh_interval = 60;
+  if (store.settings.cooling_seconds === undefined) store.settings.cooling_seconds = 300;
   return store;
 }
 
@@ -167,5 +175,164 @@ export function recordRequest(id: string, success: boolean, error?: string) {
   if (!success) account.errors++;
   account.last_used_at = new Date().toISOString();
   if (error) account.last_error = error;
+
+  // 限流检测
+  if (error && (error.includes("429") || error.includes("rate_limit"))) {
+    const coolingSeconds = load().settings.cooling_seconds || 300;
+    account.status = "cooling";
+    account.cooling_until = Date.now() + coolingSeconds * 1000;
+    account.last_error = `限流冷却 ${coolingSeconds}秒`;
+  }
+
   save();
+}
+
+// ─── Quota Refresh ────────────────────────────────────────────────────────────
+
+let quotaTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 刷新单个账户的额度
+ */
+export async function refreshAccountQuota(account: Account): Promise<boolean> {
+  if (!account.zcode_jwt) return false;
+
+  try {
+    // 激活计划
+    try {
+      const planData = await activatePlan(account.zcode_jwt);
+      const plan = planData?.plans?.[0];
+      if (plan?.ends_at) {
+        account.plan_expires_at = plan.ends_at;
+      }
+    } catch {
+      // 激活失败不影响余额查询
+    }
+
+    // 获取余额
+    const balances = await getBalance(account.zcode_jwt);
+    const quotaInfo = balances.map((b: any) => ({
+      model: b.show_name,
+      remaining: b.remaining_units,
+      total: b.total_units,
+      used: b.used_units,
+    }));
+
+    if (quotaInfo.length > 0) {
+      account.quota_details = quotaInfo;
+
+      // 额度用完判定
+      const allExhausted = quotaInfo.every((q) => q.remaining <= 0);
+      if (allExhausted && account.status === "active") {
+        account.status = "exhausted";
+        account.last_error = "额度已用完";
+      } else if (!allExhausted && account.status === "exhausted") {
+        // 额度恢复
+        account.status = "active";
+        account.last_error = undefined;
+      }
+    }
+
+    save();
+    return true;
+  } catch (e) {
+    console.error(`[quota] refresh failed for ${account.email || account.id}: ${(e as Error).message}`);
+    return false;
+  }
+}
+
+/**
+ * 刷新所有活跃账户的额度
+ */
+export async function refreshAllQuota(): Promise<{ ok: number; fail: number }> {
+  const accounts = load().accounts.filter(
+    (a) => a.zcode_jwt && a.status !== "paused" && a.status !== "error"
+  );
+
+  let ok = 0;
+  let fail = 0;
+
+  for (const account of accounts) {
+    const success = await refreshAccountQuota(account);
+    if (success) ok++;
+    else fail++;
+  }
+
+  return { ok, fail };
+}
+
+/**
+ * 检查并恢复冷却中的账户
+ */
+function checkCoolingAccounts() {
+  const s = load();
+  const now = Date.now();
+  let changed = false;
+
+  for (const account of s.accounts) {
+    if (account.status === "cooling" && account.cooling_until && now >= account.cooling_until) {
+      account.status = "active";
+      account.cooling_until = undefined;
+      account.last_error = undefined;
+      changed = true;
+      console.log(`[quota] account ${account.email || account.id} cooling ended, reactivated`);
+    }
+  }
+
+  if (changed) save();
+}
+
+/**
+ * 启动定时刷新额度
+ */
+export function startQuotaMonitor() {
+  if (quotaTimer) return;
+
+  const interval = load().settings.quota_refresh_interval || 60;
+  if (interval <= 0) {
+    console.log("[quota] quota refresh disabled (interval=0)");
+    return;
+  }
+
+  console.log(`[quota] starting quota monitor, interval=${interval}s`);
+
+  // 启动后延迟 5 秒，避免与服务启动争抢
+  setTimeout(async () => {
+    while (true) {
+      const currentInterval = load().settings.quota_refresh_interval || 60;
+      if (currentInterval <= 0) {
+        // 关闭：仍周期性检查设置，便于随时启用
+        await new Promise((r) => setTimeout(r, 30000));
+        continue;
+      }
+
+      // 检查冷却账户
+      checkCoolingAccounts();
+
+      // 刷新额度
+      try {
+        const accounts = load().accounts.filter(
+          (a) => a.zcode_jwt && a.status !== "paused" && a.status !== "error"
+        );
+        if (accounts.length > 0) {
+          const result = await refreshAllQuota();
+          console.log(`[quota] refresh done: ${result.ok} ok, ${result.fail} fail`);
+        }
+      } catch (e) {
+        console.error(`[quota] refresh error: ${(e as Error).message}`);
+      }
+
+      await new Promise((r) => setTimeout(r, currentInterval * 1000));
+    }
+  }, 5000);
+}
+
+/**
+ * 停止定时刷新额度
+ */
+export function stopQuotaMonitor() {
+  if (quotaTimer) {
+    clearInterval(quotaTimer);
+    quotaTimer = null;
+  }
 }
