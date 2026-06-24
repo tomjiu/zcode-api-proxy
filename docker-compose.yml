@@ -8,7 +8,7 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml
       - ./data:/root/.zcode-proxy
-      - C:/Users/yezi6/.zcode/v2/config.json:/root/.zcode/v2/config.json:ro
+      # Place config.json on server: ssh root@server 'mkdir -p /root/.zcode/v2 && nano /root/.zcode/v2/config.json'
     environment:
       - NODE_ENV=production
       - DOCKER_CONTAINER=true
