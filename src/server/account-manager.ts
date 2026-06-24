@@ -190,6 +190,7 @@ export function recordRequest(id: string, success: boolean, error?: string) {
 // ─── Quota Refresh ────────────────────────────────────────────────────────────
 
 let quotaTimer: ReturnType<typeof setInterval> | null = null;
+let quotaMonitorRunning = false;
 
 /**
  * 刷新单个账户的额度
@@ -286,7 +287,8 @@ function checkCoolingAccounts() {
  * 启动定时刷新额度
  */
 export function startQuotaMonitor() {
-  if (quotaTimer) return;
+  if (quotaMonitorRunning) return;
+  quotaMonitorRunning = true;
 
   const interval = load().settings.quota_refresh_interval || 60;
   if (interval <= 0) {
