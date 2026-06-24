@@ -81,7 +81,9 @@ async function solveInJsdom(cfg: FetchedCaptchaConfig): Promise<string> {
   const sdkSafe = ALIYUN_SDK_LOCAL.replace(/<\/script>/gi, "<\\/script>");
   const html = `<!DOCTYPE html><html><head></head><body><div id="captcha-element"></div><button id="captcha-button"></button><script>${sdkSafe}</script></body></html>`;
   const dom = new JSDOM(html, {
-    url: "https://zcode.z.ai/", runScripts: "dangerously", resources: "usable",
+    url: "https://zcode.z.ai/", runScripts: "dangerously",
+    // Docker 环境中禁用外部资源加载
+    resources: process.env.DOCKER_CONTAINER ? undefined : "usable",
     pretendToBeVisual: true, virtualConsole: vc,
     beforeParse(window: any) { applyPolyfills(window); window.AliyunCaptchaConfig = { region: cfg.region, prefix: cfg.prefix }; },
   });

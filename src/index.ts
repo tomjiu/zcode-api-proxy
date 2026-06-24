@@ -78,10 +78,24 @@ async function serve(configPath?: string): Promise<void> {
   });
 
   if (config.auth.mode === "oauth") {
-    const cred = await loadCredential();
+    let cred = await loadCredential();
     if (!cred) {
-      console.error("Not logged in. Run: zcode-proxy auth login " + config.provider);
-      process.exit(1);
+      // Docker 环境自动从 config.json 导入
+      if (process.env.DOCKER_CONTAINER) {
+        console.log("No credentials found, attempting auto-import from ZCode config...");
+        try {
+          cred = importFromZCodeConfig(config.provider);
+          await saveCredential(cred);
+          console.log("Auto-imported credentials from ZCode config");
+        } catch (e) {
+          console.error("Auto-import failed:", (e as Error).message);
+          console.error("Run: zcode-proxy auth login " + config.provider);
+          process.exit(1);
+        }
+      } else {
+        console.error("Not logged in. Run: zcode-proxy auth login " + config.provider);
+        process.exit(1);
+      }
     }
     auth.setOAuthCredential(cred);
   }

@@ -5,18 +5,23 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { Credential } from "./types.js";
 
 const STORE_DIR = join(homedir(), ".zcode-proxy");
 const STORE_FILE = join(STORE_DIR, "credentials.json");
 const ENV_SECRET = "ZCODE_PROXY_CREDENTIAL_SECRET";
 
-function getEncryptionKey() {
-  const hash = new Uint8Array(new ArrayBuffer(32));
-  const encoder = new TextEncoder();
-
+function getEncryptionKey(): Buffer {
+  // Docker 环境使用固定密钥
+  if (process.env.DOCKER_CONTAINER) {
+    const key = process.env[ENV_SECRET] ?? "zcode-proxy-docker-default-key!!";
+    return Buffer.from(key.padEnd(32, '!').slice(0, 32));
+  }
   const seed = process.env[ENV_SECRET] ?? `${homedir()}-${process.platform}-${process.arch}`;
-  const seedBytes = encoder.encode(seed);
+  // 使用简单的 hash 生成 32 字节密钥
+  const hash = Buffer.alloc(32);
+  const seedBytes = Buffer.from(seed);
   for (let i = 0; i < seedBytes.length; i++) {
     hash[i % 32] ^= seedBytes[i];
   }
@@ -24,27 +29,16 @@ function getEncryptionKey() {
 }
 
 async function encrypt(plaintext: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    getEncryptionKey(),
-    { name: "AES-GCM" },
-    false,
-    ["encrypt", "decrypt"],
-  );
+  const key = getEncryptionKey();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
 
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encoder = new TextEncoder();
-  const encrypted = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    encoder.encode(plaintext),
-  );
+  let encrypted = cipher.update(plaintext, "utf8");
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  const authTag = cipher.getAuthTag();
 
-  const combined = new Uint8Array(iv.length + encrypted.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(encrypted), iv.length);
-
-  return Buffer.from(combined).toString("base64");
+  const combined = Buffer.concat([iv, authTag, encrypted]);
+  return combined.toString("base64");
 }
 
 async function decrypt(ciphertext: string): Promise<string> {
@@ -58,15 +52,16 @@ async function decrypt(ciphertext: string): Promise<string> {
 
   const combined = Buffer.from(ciphertext, "base64");
   const iv = combined.slice(0, 12);
-  const data = combined.slice(12);
+  const authTag = combined.slice(12, 28);
+  const data = combined.slice(28);
 
-  const decrypted = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv },
-    key,
-    data,
-  );
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(authTag);
 
-  return new TextDecoder().decode(decrypted);
+  let decrypted = decipher.update(data);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+  return decrypted.toString("utf8");
 }
 
 export async function saveCredential(cred: Credential): Promise<void> {

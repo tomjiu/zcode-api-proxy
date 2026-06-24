@@ -1,0 +1,14 @@
+services:
+  zcode-api:
+    build: .
+    container_name: zcode-api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - ./data:/root/.zcode-proxy
+      - C:/Users/yezi6/.zcode/v2/config.json:/root/.zcode/v2/config.json:ro
+    environment:
+      - NODE_ENV=production
+      - DOCKER_CONTAINER=true
