@@ -278,7 +278,7 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ZCode Proxy Dashboard</title>
-  <link href="/static/css/app.css" rel="stylesheet">
+  <link href="static/css/app.css" rel="stylesheet">
 </head>
 <body>
 <div class="admin-header">
@@ -458,7 +458,7 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
 <!-- Toast container -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="/static/js/toast.js"></script>
+<script src="static/js/toast.js"></script>
 <script>
 const API_KEY = '${config.auth.proxyApiKey || ""}';
 const apiHeaders = API_KEY ? {'Authorization': 'Bearer ' + API_KEY, 'Content-Type': 'application/json'} : {'Content-Type': 'application/json'};
