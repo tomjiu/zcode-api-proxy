@@ -13,4 +13,3 @@ services:
       - NODE_ENV=production
       - DOCKER_CONTAINER=true
       - CAPTCHA_SDK_MODE=cdn
-      # Set ZCODE_PROXY_CREDENTIAL_SECRET on server to match local seed for credential sharing
