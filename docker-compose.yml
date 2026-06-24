@@ -12,3 +12,4 @@ services:
     environment:
       - NODE_ENV=production
       - DOCKER_CONTAINER=true
+      - CAPTCHA_SDK_MODE=cdn
