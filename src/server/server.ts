@@ -138,6 +138,14 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       return handleUpdateSettings(req);
     }
 
+    // OAuth login flow
+    if (path === "/api/oauth/init" && method === "POST") {
+      return handleOAuthInit();
+    }
+    if (path === "/api/oauth/poll" && method === "POST") {
+      return handleOAuthPoll(req);
+    }
+
     return errorResponse(404, "not_found_error", `No route for ${method} ${path}`);
   };
 }
@@ -285,7 +293,11 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/></svg>
         Refresh Quota
       </button>
-      <button onclick="openAddModal()" class="page-action-btn page-action-btn-primary">
+      <button onclick="openAddModal(); switchAddTab('login')" class="page-action-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+        OAuth Login
+      </button>
+      <button onclick="openAddModal(); switchAddTab('paste')" class="page-action-btn page-action-btn-primary">
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         Add Account
       </button>
@@ -350,19 +362,49 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
 <div class="modal-overlay" id="modal-add">
   <div class="modal">
     <div class="modal-title">Add Account</div>
-    <div class="dialog-body">
-      <div>
-        <div class="dialog-help">Paste JWT token or API Key</div>
-        <textarea class="input" id="add-jwt" rows="5" placeholder="Paste JWT token here..."></textarea>
+    <div class="filter-bar" style="margin-bottom:16px">
+      <button class="filter-chip active" id="tab-paste" onclick="switchAddTab('paste')">Paste Token</button>
+      <button class="filter-chip" id="tab-login" onclick="switchAddTab('login')">OAuth Login</button>
+    </div>
+
+    <!-- Paste Token -->
+    <div id="add-pane-paste">
+      <div class="dialog-body">
+        <div>
+          <div class="dialog-help">Paste JWT token or API Key</div>
+          <textarea class="input" id="add-jwt" rows="5" placeholder="Paste JWT token here..."></textarea>
+        </div>
+        <div class="dialog-field">
+          <span class="dialog-label">Email</span>
+          <input class="input" id="add-email" placeholder="user@example.com (optional)">
+        </div>
       </div>
-      <div class="dialog-field">
-        <span class="dialog-label">Email</span>
-        <input class="input" id="add-email" placeholder="user@example.com (optional)">
+      <div class="dialog-actions">
+        <button onclick="closeModal('modal-add')" class="dialog-btn">Cancel</button>
+        <button onclick="doAddAccount()" class="dialog-btn dialog-btn-primary">Add</button>
       </div>
     </div>
-    <div class="dialog-actions">
-      <button onclick="closeModal('modal-add')" class="dialog-btn">Cancel</button>
-      <button onclick="doAddAccount()" class="dialog-btn dialog-btn-primary">Add</button>
+
+    <!-- OAuth Login -->
+    <div id="add-pane-login" style="display:none">
+      <div class="dialog-body">
+        <div class="dialog-help">Login via Z.AI OAuth to get JWT token with Coding Plan quota.</div>
+        <div id="login-idle">
+          <button onclick="startOAuthLogin()" id="login-start-btn" class="dialog-btn dialog-btn-primary w-full" style="height:40px">Start Login</button>
+        </div>
+        <div id="login-active" style="display:none">
+          <div class="dialog-help" style="margin-bottom:6px">Open this URL in browser to authorize:</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input class="input" id="login-url" readonly style="font-size:12px">
+            <button onclick="copyLoginUrl()" class="dialog-btn">Copy</button>
+            <button onclick="openLoginUrl()" class="dialog-btn dialog-btn-primary">Open</button>
+          </div>
+          <div class="live-dot" id="login-status" style="margin-top:16px">Waiting for authorization...</div>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button onclick="cancelOAuthLogin()" class="dialog-btn">Close</button>
+      </div>
     </div>
   </div>
 </div>
@@ -439,6 +481,86 @@ function fmt(n) {
 function openModal(id) { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 function openAddModal() { openModal('modal-add'); }
+
+function switchAddTab(tab) {
+  document.getElementById('tab-paste').className = 'filter-chip' + (tab === 'paste' ? ' active' : '');
+  document.getElementById('tab-login').className = 'filter-chip' + (tab === 'login' ? ' active' : '');
+  document.getElementById('add-pane-paste').style.display = tab === 'paste' ? 'block' : 'none';
+  document.getElementById('add-pane-login').style.display = tab === 'login' ? 'block' : 'none';
+}
+
+// OAuth Login
+let oauthFlowId = '';
+let oauthPolling = false;
+
+async function startOAuthLogin() {
+  try {
+    const res = await fetch('/api/oauth/init', { method: 'POST', headers: apiHeaders });
+    const data = await res.json();
+    if (data.ok) {
+      oauthFlowId = data.flow_id;
+      document.getElementById('login-idle').style.display = 'none';
+      document.getElementById('login-active').style.display = 'block';
+      document.getElementById('login-url').value = data.authorize_url;
+      oauthPolling = true;
+      startOAuthPoll();
+    } else {
+      showToast('OAuth init failed: ' + (data.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    showToast('OAuth init failed: ' + e.message, 'error');
+  }
+}
+
+async function startOAuthPoll() {
+  while (oauthPolling && oauthFlowId) {
+    await new Promise(r => setTimeout(r, 2000));
+    if (!oauthPolling) break;
+    try {
+      const res = await fetch('/api/oauth/poll', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ flow_id: oauthFlowId }) });
+      const data = await res.json();
+      if (data.ok && data.status === 'ready') {
+        oauthPolling = false;
+        showToast('Login successful! Account added.', 'success');
+        closeModal('modal-add');
+        loadAccounts();
+        resetOAuthLogin();
+        return;
+      } else if (data.error) {
+        oauthPolling = false;
+        showToast('OAuth error: ' + data.error, 'error');
+        resetOAuthLogin();
+        return;
+      }
+    } catch (e) {
+      // Network error, continue polling
+    }
+  }
+}
+
+function cancelOAuthLogin() {
+  oauthPolling = false;
+  resetOAuthLogin();
+  closeModal('modal-add');
+}
+
+function resetOAuthLogin() {
+  oauthFlowId = '';
+  oauthPolling = false;
+  document.getElementById('login-idle').style.display = 'block';
+  document.getElementById('login-active').style.display = 'none';
+}
+
+function copyLoginUrl() {
+  const url = document.getElementById('login-url').value;
+  navigator.clipboard.writeText(url);
+  showToast('URL copied to clipboard', 'success');
+}
+
+function openLoginUrl() {
+  const url = document.getElementById('login-url').value;
+  window.open(url, '_blank');
+}
 
 async function doAddAccount() {
   const jwt = document.getElementById('add-jwt').value.trim();
@@ -532,6 +654,67 @@ async function handleUpdateSettings(req: Request): Promise<Response> {
     const body = await req.json() as any;
     updateSettings(body);
     return jsonResponse(200, { ok: true, settings: getSettings() });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
+}
+
+// ─── OAuth Handlers ───────────────────────────────────────────────────────────
+
+import { initCliOAuth, pollCliOAuth, activatePlan, getBalance } from "./oauth.js";
+
+// Store active OAuth flows
+const oauthFlows = new Map<string, { pollToken: string; expiresAt: number }>();
+
+async function handleOAuthInit(): Promise<Response> {
+  try {
+    const result = await initCliOAuth();
+    oauthFlows.set(result.flow_id, { pollToken: result.poll_token, expiresAt: result.expires_at * 1000 });
+    return jsonResponse(200, { ok: true, ...result });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
+}
+
+async function handleOAuthPoll(req: Request): Promise<Response> {
+  try {
+    const body = await req.json() as any;
+    const { flow_id } = body;
+    const flow = oauthFlows.get(flow_id);
+    if (!flow) {
+      return jsonResponse(400, { error: "flow not found or expired" });
+    }
+
+    const result = await pollCliOAuth(flow_id, flow.pollToken);
+
+    if (result.status === "ready" && result.jwt) {
+      // Activate plan and get quota
+      try {
+        await activatePlan(result.jwt);
+      } catch (e) {
+        console.error("Plan activation failed:", (e as Error).message);
+      }
+
+      // Add account
+      const account = addAccount({
+        zcode_jwt: result.jwt,
+        oauth_access_token: result.oauth_access_token,
+        user_id: result.user_id,
+        email: result.email,
+        label: result.email || result.name || "oauth",
+      });
+
+      oauthFlows.delete(flow_id);
+
+      return jsonResponse(200, {
+        ok: true,
+        status: "ready",
+        account_id: account.id,
+        email: account.email,
+      });
+    }
+
+    return jsonResponse(200, { ok: true, status: result.status, pending: result.status === "pending" });
   } catch (e) {
     return jsonResponse(500, { error: (e as Error).message });
   }
