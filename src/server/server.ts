@@ -146,6 +146,14 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       return handleOAuthPoll(req);
     }
 
+    // Import/Export
+    if (path === "/api/accounts/import" && method === "POST") {
+      return handleImportAccounts(req);
+    }
+    if (path === "/api/accounts/export" && method === "GET") {
+      return handleExportAccounts(req);
+    }
+
     return errorResponse(404, "not_found_error", `No route for ${method} ${path}`);
   };
 }
@@ -715,6 +723,104 @@ async function handleOAuthPoll(req: Request): Promise<Response> {
     }
 
     return jsonResponse(200, { ok: true, status: result.status, pending: result.status === "pending" });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
+}
+
+// ─── Import/Export Handlers ───────────────────────────────────────────────────
+
+async function handleExportAccounts(req: Request): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const format = url.searchParams.get("format") || "json";
+
+    const accounts = listAccounts();
+    const exportData = accounts.map((a) => ({
+      email: a.email,
+      zcode_jwt: a.zcode_jwt,
+      user_id: a.user_id,
+      label: a.label,
+      status: a.status,
+      plan_expires_at: a.plan_expires_at,
+      quota_details: a.quota_details,
+    }));
+
+    if (format === "csv") {
+      const header = "email,zcode_jwt,status";
+      const rows = exportData.map((a) => `${a.email || ""},${a.zcode_jwt || ""},${a.status || ""}`);
+      const csv = [header, ...rows].join("\n");
+      return new Response(csv, {
+        status: 200,
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": 'attachment; filename="zcode-accounts.csv"',
+        },
+      });
+    }
+
+    return new Response(JSON.stringify({ accounts: exportData }, null, 2), {
+      status: 200,
+      headers: {
+        "content-type": "application/json",
+        "content-disposition": 'attachment; filename="zcode-accounts.json"',
+      },
+    });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
+}
+
+async function handleImportAccounts(req: Request): Promise<Response> {
+  try {
+    const body = await req.json() as any;
+    let imported = 0;
+    const errors: string[] = [];
+
+    let accountList: any[] = [];
+
+    if (Array.isArray(body)) {
+      accountList = body;
+    } else if (body.accounts && Array.isArray(body.accounts)) {
+      accountList = body.accounts;
+    } else {
+      accountList = [body];
+    }
+
+    for (const item of accountList) {
+      if (!item.zcode_jwt) {
+        errors.push(`missing zcode_jwt: ${item.email || "unknown"}`);
+        continue;
+      }
+
+      try {
+        // Activate plan
+        let planExpiresAt: number | null = null;
+        try {
+          const planData = await activatePlan(item.zcode_jwt);
+          const plan = planData?.plans?.[0];
+          if (plan?.ends_at) planExpiresAt = plan.ends_at;
+        } catch {
+          // Activation failure doesn't block import
+        }
+
+        addAccount({
+          zcode_jwt: item.zcode_jwt,
+          email: item.email || null,
+          label: item.label || item.email || "imported",
+          plan_expires_at: planExpiresAt,
+        });
+        imported++;
+      } catch (e) {
+        errors.push(`import failed for ${item.email || "unknown"}: ${(e as Error).message}`);
+      }
+    }
+
+    return jsonResponse(200, {
+      ok: true,
+      imported,
+      errors: errors.length > 0 ? errors : undefined,
+    });
   } catch (e) {
     return jsonResponse(500, { error: (e as Error).message });
   }

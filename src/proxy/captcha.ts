@@ -17,7 +17,9 @@ const CDN_URL = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptc
 let ALIYUN_SDK_LOCAL = "";
 if (SDK_MODE === "local") {
   try {
-    ALIYUN_SDK_LOCAL = require("./AliyunCaptcha.js.txt");
+    const { readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    ALIYUN_SDK_LOCAL = readFileSync(join(__dirname, "AliyunCaptcha.js.txt"), "utf-8");
   } catch {
     // 文件不存在时回退到 CDN 模式
   }
