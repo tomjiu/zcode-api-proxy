@@ -66,6 +66,11 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       });
     }
 
+    // Static files
+    if (path.startsWith("/static/")) {
+      return serveStaticFile(path);
+    }
+
     // Proxy API key auth (if configured)
     if (config.auth.proxyApiKey) {
       const authHeader = req.headers.get("authorization") ?? req.headers.get("x-api-key");
@@ -202,6 +207,33 @@ function jsonResponse(status: number, data: unknown): Response {
   });
 }
 
+/** Serve static files */
+function serveStaticFile(path: string): Response {
+  try {
+    const { readFileSync, existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const filePath = join(__dirname, "statics", path.replace("/static/", ""));
+    if (!existsSync(filePath)) {
+      return new Response("Not Found", { status: 404 });
+    }
+    const content = readFileSync(filePath);
+    const ext = path.split(".").pop() || "";
+    const contentTypes: Record<string, string> = {
+      css: "text/css",
+      js: "application/javascript",
+      html: "text/html",
+      png: "image/png",
+      jpg: "image/jpeg",
+      svg: "image/svg+xml",
+    };
+    return new Response(content, {
+      headers: { "content-type": contentTypes[ext] || "application/octet-stream" },
+    });
+  } catch {
+    return new Response("Internal Error", { status: 500 });
+  }
+}
+
 /** Format uptime */
 function formatUptime(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -216,180 +248,229 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
   const accStats = getStats();
 
   return `<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8">
-<title>ZCode Proxy Dashboard</title>
-<style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;padding:24px}
-  h1{font-size:24px;margin-bottom:24px;color:#38bdf8}
-  h2{font-size:18px;margin:24px 0 12px;color:#cbd5e1}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
-  .card{background:#1e293b;border-radius:8px;padding:16px}
-  .card .label{font-size:12px;color:#94a3b8;text-transform:uppercase}
-  .card .value{font-size:28px;font-weight:bold;margin-top:4px}
-  .good{color:#4ade80}.warn{color:#fbbf24}.bad{color:#f87171}
-  table{width:100%;border-collapse:collapse;margin-top:16px}
-  th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #334155;font-size:13px}
-  th{color:#94a3b8;font-weight:500;font-size:12px;text-transform:uppercase}
-  .badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px}
-  .badge-openai{background:#166534;color:#4ade80}
-  .badge-anthropic{background:#854d0e;color:#fbbf24}
-  .badge-active{background:#166534;color:#4ade80}
-  .badge-paused{background:#854d0e;color:#fbbf24}
-  .badge-error{background:#991b1b;color:#f87171}
-  .endpoint{background:#1e293b;border-radius:8px;padding:12px 16px;margin-bottom:8px;font-family:monospace;font-size:13px}
-  .endpoint .method{color:#38bdf8;font-weight:bold}
-  button{background:#38bdf8;color:#0f172a;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;font-weight:600;font-size:12px}
-  button:hover{background:#7dd3fc}
-  button.btn-danger{background:#ef4444}
-  button.btn-danger:hover{background:#dc2626}
-  button.btn-success{background:#22c55e}
-  button.btn-success:hover{background:#16a34a}
-  .modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center}
-  .modal.active{display:flex}
-  .modal-content{background:#1e293b;border-radius:12px;padding:24px;max-width:500px;width:90%}
-  .modal-title{font-size:18px;font-weight:bold;margin-bottom:16px;color:#38bdf8}
-  input,textarea,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:8px 12px;border-radius:6px;width:100%;margin-bottom:12px}
-  textarea{min-height:100px;resize:vertical}
-  .form-group{margin-bottom:12px}
-  .form-label{display:block;font-size:12px;color:#94a3b8;margin-bottom:4px}
-  .form-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
-  .quota-bar{height:6px;border-radius:3px;background:#334155;margin-top:4px;overflow:hidden}
-  .quota-bar-fill{height:100%;border-radius:3px;transition:width 0.3s}
-</style>
-</head><body>
-<h1>ZCode Proxy Dashboard</h1>
-
-<div class="grid">
-  <div class="card"><div class="label">Uptime</div><div class="value">${formatUptime(stats.uptime)}</div></div>
-  <div class="card"><div class="label">Requests</div><div class="value">${stats.totalRequests}</div></div>
-  <div class="card"><div class="label">Success Rate</div><div class="value good">${stats.successRate}</div></div>
-  <div class="card"><div class="label">Accounts</div><div class="value">${accStats.active}<span style="font-size:14px;color:#94a3b8">/${accStats.total}</span></div></div>
-</div>
-
-<h2>Account Pool
-  <button onclick="openAddModal()" style="float:right;font-size:13px">+ Add Account</button>
-  <button onclick="refreshAllQuota()" style="float:right;margin-right:8px;font-size:13px;background:#8b5cf6">Refresh Quota</button>
-</h2>
-<table>
-  <tr><th>Email</th><th>Status</th><th>GLM-5.2</th><th>GLM-5-Turbo</th><th>Requests</th><th>Errors</th><th>Actions</th></tr>
-  <tbody id="accounts-body"></tbody>
-</table>
-
-<h2>Configuration</h2>
-<div style="background:#1e293b;border-radius:8px;padding:16px;margin-bottom:16px">
-  <p style="margin-bottom:8px"><strong>Plan:</strong> ${config.plan}</p>
-  <p style="margin-bottom:8px"><strong>Provider:</strong> ${config.provider}</p>
-  <p><strong>Default Model:</strong> ${config.defaultModel}</p>
-</div>
-
-<h2>API Endpoints</h2>
-<div class="endpoint"><span class="method">POST</span> /v1/chat/completions — OpenAI Chat</div>
-<div class="endpoint"><span class="method">POST</span> /v1/messages — Anthropic Messages</div>
-<div class="endpoint"><span class="method">GET</span> /v1/models — Model List</div>
-<div class="endpoint"><span class="method">GET</span> /api/accounts — Account List</div>
-<div class="endpoint"><span class="method">POST</span> /api/accounts — Add Account</div>
-
-<h2>Recent Requests</h2>
-<table>
-  <tr><th>Time</th><th>Method</th><th>Model</th><th>Duration</th><th>Status</th><th>Error</th></tr>
-  ${metrics.recentLogs.slice(0, 20).map(log => `<tr>
-    <td>${new Date(log.time).toLocaleTimeString()}</td>
-    <td><span class="badge badge-${log.method}">${log.method}</span></td>
-    <td>${log.model}</td>
-    <td>${log.durationMs}ms</td>
-    <td>${log.success ? '<span style="color:#4ade80">✓</span>' : '<span style="color:#f87171">✗</span>'}</td>
-    <td style="font-size:11px;color:#94a3b8">${log.error ? log.error.slice(0, 50) : '—'}</td>
-  </tr>`).join('')}
-</table>
-
-<!-- Add Account Modal -->
-<div class="modal" id="add-modal">
-  <div class="modal-content">
-    <div class="modal-title">Add Account</div>
-    <div class="form-group">
-      <label class="form-label">JWT Token</label>
-      <textarea id="add-jwt" placeholder="Paste JWT token here..."></textarea>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZCode Proxy Dashboard</title>
+  <link href="/static/css/app.css" rel="stylesheet">
+</head>
+<body>
+<div class="admin-header">
+  <div class="admin-header-inner">
+    <div class="admin-brand-wrap">
+      <div class="admin-brand">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        ZCode Proxy
+      </div>
     </div>
-    <div class="form-group">
-      <label class="form-label">Email (optional)</label>
-      <input id="add-email" placeholder="user@example.com">
+    <div class="admin-nav">
+      <a class="admin-nav-link active" href="/">Dashboard</a>
     </div>
-    <div class="form-actions">
-      <button onclick="closeAddModal()">Cancel</button>
-      <button onclick="doAddAccount()" class="btn-success">Add</button>
+    <div class="admin-header-right">
+      <span class="admin-header-version">v2.0</span>
     </div>
   </div>
 </div>
 
+<main class="admin-main">
+  <div class="page-hd">
+    <div>
+      <div class="page-title">Account Pool</div>
+      <div class="page-sub">Multi-account rotation · Auto-switch when quota exhausted · Real-time monitoring</div>
+    </div>
+    <div class="page-actions">
+      <span class="live-dot">Live monitoring</span>
+      <button onclick="refreshAllQuota()" class="page-action-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/></svg>
+        Refresh Quota
+      </button>
+      <button onclick="openAddModal()" class="page-action-btn page-action-btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" fill="none"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add Account
+      </button>
+    </div>
+  </div>
+
+  <div class="section-head"><div class="section-title">Account Overview</div></div>
+  <div class="stat-grid">
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Total Accounts</div><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M4 19a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4"/><circle cx="12" cy="8" r="4"/></svg></span></div><div class="stat-num" id="s-total">${accStats.total}</div></div>
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Active</div><span class="stat-icon" style="color:#16a34a"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.9"><circle cx="12" cy="12" r="8"/><path d="m8.5 12 2.4 2.4 4.8-4.8"/></svg></span></div><div class="stat-num" id="s-active" style="color:#16a34a">${accStats.active}</div></div>
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Requests</div><span class="stat-icon" style="color:#4c9168"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg></span></div><div class="stat-num" id="s-requests" style="color:#4c9168">${stats.totalRequests}</div></div>
+    <div class="stat-cell"><div class="stat-top"><div class="stat-label">Success Rate</div><span class="stat-icon" style="color:#16a34a"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 2v20M2 12h20"/></svg></span></div><div class="stat-num" id="s-rate" style="color:#16a34a">${stats.successRate}</div></div>
+  </div>
+
+  <div class="section-head">
+    <div class="section-title">Account Details <span class="section-count-badge" id="tbl-count">0</span></div>
+    <div class="section-meta" id="last-updated"></div>
+  </div>
+
+  <div class="table-card">
+    <table>
+      <thead><tr>
+        <th>Email</th>
+        <th class="table-center" style="width:80px">Status</th>
+        <th style="min-width:220px">Quota</th>
+        <th class="table-center" style="width:60px">Requests</th>
+        <th class="table-center" style="width:60px">Errors</th>
+        <th style="width:120px">Last Used</th>
+        <th style="width:120px">Actions</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="section-head"><div class="section-title">API Endpoints</div></div>
+  <div style="background:#fff;border-radius:14px;padding:16px;margin-bottom:16px">
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/chat/completions — OpenAI Chat</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">POST</span> /v1/messages — Anthropic Messages</div>
+    <div style="font-family:monospace;font-size:13px;margin-bottom:6px"><span style="color:#4c76b2;font-weight:bold">GET</span> /v1/models — Model List</div>
+    <div style="font-family:monospace;font-size:13px"><span style="color:#4c76b2;font-weight:bold">GET</span> /api/status — API Status</div>
+  </div>
+
+  <div class="section-head"><div class="section-title">Recent Requests</div></div>
+  <div class="table-card">
+    <table>
+      <thead><tr><th>Time</th><th>Method</th><th>Model</th><th>Duration</th><th>Status</th><th>Error</th></tr></thead>
+      <tbody>
+        ${metrics.recentLogs.slice(0, 20).map(log => `<tr>
+          <td>${new Date(log.time).toLocaleTimeString()}</td>
+          <td><span class="badge badge-${log.method === 'openai' ? 'jwt' : 'apiKey'}">${log.method}</span></td>
+          <td>${log.model}</td>
+          <td>${log.durationMs}ms</td>
+          <td>${log.success ? '<span style="color:#16a34a">✓</span>' : '<span style="color:#dc2626">✗</span>'}</td>
+          <td style="font-size:11px;color:#9a9a9a">${log.error ? log.error.slice(0, 50) : '—'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<!-- Add Account Modal -->
+<div class="modal-overlay" id="modal-add">
+  <div class="modal">
+    <div class="modal-title">Add Account</div>
+    <div class="dialog-body">
+      <div>
+        <div class="dialog-help">Paste JWT token or API Key</div>
+        <textarea class="input" id="add-jwt" rows="5" placeholder="Paste JWT token here..."></textarea>
+      </div>
+      <div class="dialog-field">
+        <span class="dialog-label">Email</span>
+        <input class="input" id="add-email" placeholder="user@example.com (optional)">
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button onclick="closeModal('modal-add')" class="dialog-btn">Cancel</button>
+      <button onclick="doAddAccount()" class="dialog-btn dialog-btn-primary">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="/static/js/toast.js"></script>
 <script>
 const API_KEY = '${config.auth.proxyApiKey || ""}';
-const headers = API_KEY ? {'Authorization': 'Bearer ' + API_KEY, 'Content-Type': 'application/json'} : {'Content-Type': 'application/json'};
+const apiHeaders = API_KEY ? {'Authorization': 'Bearer ' + API_KEY, 'Content-Type': 'application/json'} : {'Content-Type': 'application/json'};
 
 async function loadAccounts() {
   try {
-    const res = await fetch('/api/accounts', { headers });
+    const res = await fetch('/api/accounts', { headers: apiHeaders });
     const data = await res.json();
     renderAccounts(data.accounts || []);
+    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Failed to load accounts:', e);
   }
 }
 
 function renderAccounts(accounts) {
-  const tbody = document.getElementById('accounts-body');
+  document.getElementById('tbl-count').textContent = accounts.length;
+  const tbody = document.getElementById('tbody');
   if (!accounts.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8">No accounts. Click "Add Account" to add one.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No accounts. Click "Add Account" to add one.</td></tr>';
     return;
   }
   tbody.innerHTML = accounts.map(a => {
     const glm52 = a.quota_details?.find(q => q.model === 'GLM-5.2');
     const glm5turbo = a.quota_details?.find(q => q.model === 'GLM-5-Turbo');
+    const statusClass = a.status === 'active' ? 'active' : (a.status === 'paused' ? 'disabled' : 'invalid');
     return '<tr>' +
-      '<td>' + (a.email || a.id.slice(0, 8)) + '</td>' +
-      '<td><span class="badge badge-' + a.status + '">' + a.status + '</span></td>' +
-      '<td>' + (glm52 ? '<div class="quota-bar"><div class="quota-bar-fill" style="width:' + Math.round(glm52.remaining/glm52.total*100) + '%"></div></div><small>' + (glm52.remaining/1000).toFixed(0) + 'k</small>' : '—') + '</td>' +
-      '<td>' + (glm5turbo ? '<div class="quota-bar"><div class="quota-bar-fill" style="width:' + Math.round(glm5turbo.remaining/glm5turbo.total*100) + '%"></div></div><small>' + (glm5turbo.remaining/1000).toFixed(0) + 'k</small>' : '—') + '</td>' +
-      '<td>' + a.requests + '</td>' +
-      '<td>' + a.errors + '</td>' +
-      '<td>' +
-        '<button onclick="toggleAccount(\\'' + a.id + '\\',\\'' + a.status + '\\')" style="padding:2px 8px;font-size:11px">' + (a.status === 'active' ? 'Pause' : 'Resume') + '</button> ' +
-        '<button onclick="deleteAccount(\\'' + a.id + '\\')" class="btn-danger" style="padding:2px 8px;font-size:11px">Delete</button>' +
-      '</td>' +
+      '<td><span class="tok">' + (a.email || a.id.slice(0, 12)) + '</span></td>' +
+      '<td class="table-center"><span class="badge badge-' + statusClass + '">' + a.status + '</span></td>' +
+      '<td>' + quotaCell(glm52, glm5turbo) + '</td>' +
+      '<td class="table-center" style="color:#8f8f8f">' + a.requests + '</td>' +
+      '<td class="table-center" style="color:#9a9a9a">' + a.errors + '</td>' +
+      '<td style="font-size:12px;color:#9a9a9a">' + (a.last_used_at ? new Date(a.last_used_at).toLocaleString() : '—') + '</td>' +
+      '<td><div class="row-actions">' +
+        '<button onclick="toggleAccount(\\'' + a.id + '\\',\\'' + a.status + '\\')" class="row-icon-btn" title="' + (a.status === 'active' ? 'Pause' : 'Resume') + '">' +
+          (a.status === 'active' ? '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 15.5 15.5"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.708"/><path d="M3 4v5h5"/></svg>') +
+        '</button>' +
+        '<button onclick="deleteAccount(\\'' + a.id + '\\')" class="row-icon-btn row-icon-danger" title="Delete"><svg viewBox="0 0 24 24"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/></svg></button>' +
+      '</div></td>' +
     '</tr>';
   }).join('');
 }
 
-function openAddModal() { document.getElementById('add-modal').classList.add('active'); }
-function closeAddModal() { document.getElementById('add-modal').classList.remove('active'); }
+function quotaCell(glm52, glm5turbo) {
+  let html = '<div class="quota-rows">';
+  if (glm52) {
+    const pct = glm52.total > 0 ? Math.max(0, Math.min(100, Math.round(glm52.remaining / glm52.total * 100))) : 0;
+    const color = glm52.remaining <= 0 ? '#c9c9cf' : (pct < 15 ? '#b0632a' : '#4c9168');
+    html += '<div class="quota-row"><span class="quota-row-name">5.2</span><span class="quota-row-track"><span class="quota-row-fill" style="width:' + pct + '%;background:' + color + '"></span></span><span class="quota-row-val">' + fmt(glm52.remaining) + ' / ' + fmt(glm52.total) + '</span></div>';
+  }
+  if (glm5turbo) {
+    const pct = glm5turbo.total > 0 ? Math.max(0, Math.min(100, Math.round(glm5turbo.remaining / glm5turbo.total * 100))) : 0;
+    const color = glm5turbo.remaining <= 0 ? '#c9c9cf' : (pct < 15 ? '#b0632a' : '#4c9168');
+    html += '<div class="quota-row"><span class="quota-row-name">5-Turbo</span><span class="quota-row-track"><span class="quota-row-fill" style="width:' + pct + '%;background:' + color + '"></span></span><span class="quota-row-val">' + fmt(glm5turbo.remaining) + ' / ' + fmt(glm5turbo.total) + '</span></div>';
+  }
+  if (!glm52 && !glm5turbo) return '<span class="quota-empty">No quota data</span>';
+  return html + '</div>';
+}
+
+function fmt(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(0) + 'k';
+  return String(n);
+}
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function openAddModal() { openModal('modal-add'); }
 
 async function doAddAccount() {
   const jwt = document.getElementById('add-jwt').value.trim();
   const email = document.getElementById('add-email').value.trim();
-  if (!jwt) return alert('JWT token required');
+  if (!jwt) return showToast('JWT token required', 'error');
   try {
-    const res = await fetch('/api/accounts', { method: 'POST', headers, body: JSON.stringify({ zcode_jwt: jwt, email: email || undefined }) });
+    const res = await fetch('/api/accounts', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ zcode_jwt: jwt, email: email || undefined }) });
     const data = await res.json();
-    if (data.ok) { closeAddModal(); loadAccounts(); } else { alert('Error: ' + (data.error || 'unknown')); }
-  } catch (e) { alert('Error: ' + e.message); }
+    if (data.ok) { closeModal('modal-add'); loadAccounts(); showToast('Account added successfully', 'success'); }
+    else { showToast('Error: ' + (data.error || 'unknown'), 'error'); }
+  } catch (e) { showToast('Error: ' + e.message, 'error'); }
 }
 
 async function deleteAccount(id) {
   if (!confirm('Delete this account?')) return;
-  await fetch('/api/accounts/' + id, { method: 'DELETE', headers });
+  await fetch('/api/accounts/' + id, { method: 'DELETE', headers: apiHeaders });
   loadAccounts();
+  showToast('Account deleted', 'success');
 }
 
 async function toggleAccount(id, currentStatus) {
   const newStatus = currentStatus === 'active' ? 'paused' : 'active';
-  await fetch('/api/accounts/' + id + '/status', { method: 'POST', headers, body: JSON.stringify({ status: newStatus }) });
+  await fetch('/api/accounts/' + id + '/status', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ status: newStatus }) });
   loadAccounts();
+  showToast('Account status updated', 'success');
 }
 
 async function refreshAllQuota() {
-  await fetch('/api/accounts/quota', { headers });
+  showToast('Refreshing quota...', 'info');
+  await fetch('/api/accounts/quota', { headers: apiHeaders });
   loadAccounts();
+  showToast('Quota refreshed', 'success');
 }
 
 loadAccounts();
