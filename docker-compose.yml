@@ -13,3 +13,4 @@ services:
       - NODE_ENV=production
       - DOCKER_CONTAINER=true
       - CAPTCHA_SDK_MODE=cdn
+      - ZCODE_PROXY_CREDENTIAL_SECRET=C:\Users\yezi6-win32-x64
