@@ -465,7 +465,7 @@ const apiHeaders = API_KEY ? {'Authorization': 'Bearer ' + API_KEY, 'Content-Typ
 
 async function loadAccounts() {
   try {
-    const res = await fetch('/api/accounts', { headers: apiHeaders });
+    const res = await fetch('api/accounts', { headers: apiHeaders });
     const data = await res.json();
     renderAccounts(data.accounts || []);
     document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -545,7 +545,7 @@ let oauthPolling = false;
 
 async function startOAuthLogin() {
   try {
-    const res = await fetch('/api/oauth/init', { method: 'POST', headers: apiHeaders });
+    const res = await fetch('api/oauth/init', { method: 'POST', headers: apiHeaders });
     const data = await res.json();
     if (data.ok) {
       oauthFlowId = data.flow_id;
@@ -567,7 +567,7 @@ async function startOAuthPoll() {
     await new Promise(r => setTimeout(r, 2000));
     if (!oauthPolling) break;
     try {
-      const res = await fetch('/api/oauth/poll', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ flow_id: oauthFlowId }) });
+      const res = await fetch('api/oauth/poll', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ flow_id: oauthFlowId }) });
       const data = await res.json();
       if (data.ok && data.status === 'ready') {
         oauthPolling = false;
@@ -617,7 +617,7 @@ async function doAddAccount() {
   const email = document.getElementById('add-email').value.trim();
   if (!jwt) return showToast('请输入 JWT Token', 'error');
   try {
-    const res = await fetch('/api/accounts', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ zcode_jwt: jwt, email: email || undefined }) });
+    const res = await fetch('api/accounts', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ zcode_jwt: jwt, email: email || undefined }) });
     const data = await res.json();
     if (data.ok) { closeModal('modal-add'); loadAccounts(); showToast('账号添加成功', 'success'); }
     else { showToast('错误: ' + (data.error || '未知错误'), 'error'); }
@@ -626,21 +626,21 @@ async function doAddAccount() {
 
 async function deleteAccount(id) {
   if (!confirm('确认删除此账号？')) return;
-  await fetch('/api/accounts/' + id, { method: 'DELETE', headers: apiHeaders });
+  await fetch('api/accounts/' + id, { method: 'DELETE', headers: apiHeaders });
   loadAccounts();
   showToast('账号已删除', 'success');
 }
 
 async function toggleAccount(id, currentStatus) {
   const newStatus = currentStatus === 'active' ? 'paused' : 'active';
-  await fetch('/api/accounts/' + id + '/status', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ status: newStatus }) });
+  await fetch('api/accounts/' + id + '/status', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ status: newStatus }) });
   loadAccounts();
   showToast('账号状态已更新', 'success');
 }
 
 async function refreshAllQuota() {
   showToast('正在刷新额度...', 'info');
-  await fetch('/api/accounts/quota', { headers: apiHeaders });
+  await fetch('api/accounts/quota', { headers: apiHeaders });
   loadAccounts();
   showToast('额度已刷新', 'success');
 }
@@ -648,7 +648,7 @@ async function refreshAllQuota() {
 // 设置相关
 async function loadSettings() {
   try {
-    const res = await fetch('/api/settings', { headers: apiHeaders });
+    const res = await fetch('api/settings', { headers: apiHeaders });
     const data = await res.json();
     if (data.ok && data.settings) {
       document.getElementById('rotation-select').value = data.settings.rotation || 'least_used';
@@ -662,19 +662,19 @@ async function loadSettings() {
 
 async function updateRotation() {
   const rotation = document.getElementById('rotation-select').value;
-  await fetch('/api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ rotation }) });
+  await fetch('api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ rotation }) });
   showToast('轮询策略已更新', 'success');
 }
 
 async function updateRefreshInterval() {
   const quota_refresh_interval = parseInt(document.getElementById('refresh-interval').value) || 60;
-  await fetch('/api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ quota_refresh_interval }) });
+  await fetch('api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ quota_refresh_interval }) });
   showToast('刷新间隔已更新', 'success');
 }
 
 async function updateCoolingSeconds() {
   const cooling_seconds = parseInt(document.getElementById('cooling-seconds').value) || 300;
-  await fetch('/api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ cooling_seconds }) });
+  await fetch('api/settings', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ cooling_seconds }) });
   showToast('冷却时间已更新', 'success');
 }
 
