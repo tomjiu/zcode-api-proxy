@@ -15,10 +15,10 @@ export async function handleChatCompletions(
 }
 
 /** Handle GET /v1/models — return the model list in OpenAI format. */
-export function handleListModels(): Response {
+export function handleListModels(allowedIds?: string[]): Response {
   const list: OpenAIModelList = {
     object: "list",
-    data: MODELS.map((m) => ({
+    data: (allowedIds ? MODELS.filter((m) => allowedIds.includes(m.id)) : MODELS).map((m) => ({
       id: m.id,
       object: "model" as const,
       owned_by: "zcode-proxy",

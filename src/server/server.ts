@@ -94,7 +94,7 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       return handleResponses(req, proxyOpts);
     }
     if (path === "/v1/models" && method === "GET") {
-      return handleListModels();
+      return handleListModels(config.plan === "start-plan" ? ["glm-5.2", "glm-5-turbo"] : undefined);
     }
 
     // Anthropic routes
