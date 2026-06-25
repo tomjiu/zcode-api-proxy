@@ -23,6 +23,23 @@
 import type { Format } from "../translator/types.js";
 import { buildStartPlanSystem } from "./system-prompt.js";
 
+/** Models known to the upstream. Unknown models (e.g. claude-*) are remapped to this default. */
+const UPSTREAM_MODELS = new Set([
+  "glm-4.5-air", "glm-4.6", "glm-4.6v", "glm-4.7",
+  "glm-5", "glm-5-turbo", "glm-5v-turbo", "glm-5.1", "glm-5.2",
+]);
+const DEFAULT_MODEL = "glm-5.2";
+
+/** Remap unknown model names (Claude Code sends claude-*) to a known GLM model. */
+function applyModelRemap(body: Record<string, unknown>): boolean {
+  if (typeof body.model !== "string") return false;
+  if (UPSTREAM_MODELS.has(body.model)) return false;
+  const orig = body.model;
+  body.model = DEFAULT_MODEL;
+  console.log();
+  return true;
+}
+
 interface TransformContext {
   format: Format;
   /** When set (OAuth mode), the Anthropic-format body gets `metadata.user_id` injected. */
@@ -49,10 +66,12 @@ export function transformRequestBody(body: string | undefined, ctx: TransformCon
   let modified = false;
 
   if (ctx.format === "openai") {
+    modified = applyModelRemap(parsed as Record<string, unknown>) || modified;
     modified = applyStreamOptionsIncludeUsage(parsed as Record<string, unknown>) || modified;
   }
   if (ctx.format === "anthropic") {
     const obj = parsed as Record<string, unknown>;
+    modified = applyModelRemap(obj) || modified;
     if (ctx.startPlan) {
       modified = applyStartPlanSystem(obj) || modified;
     }
