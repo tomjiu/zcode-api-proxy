@@ -9,6 +9,10 @@ import { handleMessages } from "./routes-anthropic.js";
 import { handleResponses } from "./routes-responses.js";
 import { errorResponse } from "../proxy/handler.js";
 import { MODELS } from "../provider/models.js";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface ServerOptions {
   config: ProxyConfig;
@@ -132,14 +136,29 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       const id = path.split("/")[3];
       return handleUpdateAccountStatus(req, id);
     }
+    if (path.match(/^\/api\/accounts\/[^/]+\/set-active$/) && method === "POST") {
+      const id = path.split("/")[3];
+      return handleSetActiveAccount(id);
+    }
     if (path === "/api/accounts/quota" && method === "GET") {
       return handleRefreshQuota();
+    }
+    if (path === "/api/accounts/current" && method === "GET") {
+      return handleGetCurrentAccount();
     }
     if (path === "/api/settings" && method === "GET") {
       return handleGetSettings();
     }
     if (path === "/api/settings" && method === "POST") {
       return handleUpdateSettings(req);
+    }
+
+    // Auto registration flow
+    if (path === "/api/autoreg/start" && method === "POST") {
+      return handleAutoregStart(req);
+    }
+    if (path === "/api/autoreg/status" && method === "GET") {
+      return handleAutoregStatus();
     }
 
     // OAuth login flow
@@ -306,6 +325,11 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
     </div>
     <div class="page-actions">
       <span class="live-dot">实时监控中</span>
+      <button onclick="startAutoRegister()" id="autoreg-btn" class="page-action-btn page-action-btn-primary">
+        <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+        一键自动注册
+      </button>
+      <span id="autoreg-status" class="section-meta"></span>
       <button onclick="refreshAllQuota()" class="page-action-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/></svg>
         刷新额度
@@ -340,6 +364,7 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
         <th>邮箱</th>
         <th class="table-center" style="width:80px">状态</th>
         <th style="min-width:220px">额度</th>
+        <th style="width:140px">过期时间</th>
         <th class="table-center" style="width:60px">请求</th>
         <th class="table-center" style="width:60px">错误</th>
         <th style="width:120px">最近使用</th>
@@ -463,11 +488,68 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
 const API_KEY = '${config.auth.proxyApiKey || ""}';
 const apiHeaders = API_KEY ? {'Authorization': 'Bearer ' + API_KEY, 'Content-Type': 'application/json'} : {'Content-Type': 'application/json'};
 
+
+let autoRegPolling = false;
+async function startAutoRegister() {
+  const btn = document.getElementById('autoreg-btn');
+  if (btn) btn.disabled = true;
+  setAutoRegStatus('启动中...');
+  try {
+    const res = await fetch('api/autoreg/start', { method: 'POST', headers: apiHeaders, body: JSON.stringify({}) });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '启动失败');
+    showToast(data.status === 'running' ? '自动注册已在运行' : '自动注册已启动', 'info');
+    autoRegPolling = true;
+    pollAutoRegister();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    setAutoRegStatus('');
+    showToast('自动注册启动失败: ' + e.message, 'error');
+  }
+}
+async function pollAutoRegister() {
+  while (autoRegPolling) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const res = await fetch('api/autoreg/status', { headers: apiHeaders });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || '状态查询失败');
+      const tail = (data.log_tail || '').split('\n').filter(Boolean).slice(-1)[0] || '';
+      setAutoRegStatus(data.status + (tail ? ' · ' + tail.slice(0, 80) : ''));
+      if (data.status === 'succeeded') {
+        autoRegPolling = false;
+        document.getElementById('autoreg-btn').disabled = false;
+        setAutoRegStatus('完成：' + (data.email || '已写入凭据'));
+        showToast('自动注册完成，账号已添加并设为当前。', 'success');
+        loadAccounts();
+        refreshAllQuota();
+        return;
+      }
+      if (data.status === 'failed') {
+        autoRegPolling = false;
+        document.getElementById('autoreg-btn').disabled = false;
+        showToast('自动注册失败: ' + (data.error || tail || '未知错误'), 'error');
+        return;
+      }
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+}
+function setAutoRegStatus(text) {
+  const el = document.getElementById('autoreg-status');
+  if (el) el.textContent = text || '';
+}
+
 async function loadAccounts() {
   try {
-    const res = await fetch('api/accounts', { headers: apiHeaders });
-    const data = await res.json();
-    renderAccounts(data.accounts || []);
+    const [accountsRes, currentRes] = await Promise.all([
+      fetch('api/accounts', { headers: apiHeaders }),
+      fetch('api/accounts/current', { headers: apiHeaders })
+    ]);
+    const accountsData = await accountsRes.json();
+    const currentData = await currentRes.json();
+    renderAccounts(accountsData.accounts || [], currentData.current_jwt);
     document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
   } catch (e) {
     console.error('Failed to load accounts:', e);
@@ -476,28 +558,47 @@ async function loadAccounts() {
 
 const STATUS_LABELS = {active:'正常',paused:'暂停',exhausted:'用完',cooling:'限流',error:'异常'};
 
-function renderAccounts(accounts) {
+function renderAccounts(accounts, currentJWT) {
   document.getElementById('tbl-count').textContent = accounts.length;
   const tbody = document.getElementById('tbody');
   if (!accounts.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">暂无账号，点击右上角「添加账号」添加</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">暂无账号，点击右上角「添加账号」添加</td></tr>';
     return;
   }
+  const now = Date.now();
   tbody.innerHTML = accounts.map(a => {
     const glm52 = a.quota_details?.find(q => q.model === 'GLM-5.2');
     const glm5turbo = a.quota_details?.find(q => q.model === 'GLM-5-Turbo');
-    const statusClass = a.status === 'active' ? 'active' : (a.status === 'paused' || a.status === 'cooling' ? 'disabled' : 'invalid');
-    const statusLabel = STATUS_LABELS[a.status] || a.status;
-    const isDisabled = a.status === 'paused' || a.status === 'error';
-    return '<tr>' +
-      '<td><span class="tok">' + (a.email || a.id.slice(0, 12)) + '</span></td>' +
+
+    // Check if this is the current active account
+    const isCurrent = currentJWT && a.zcode_jwt === currentJWT;
+
+    // Check if plan expired
+    const isPlanExpired = a.plan_expires_at && (now >= a.plan_expires_at * 1000);
+    const statusClass = isPlanExpired ? 'invalid' : (a.status === 'active' ? 'active' : (a.status === 'paused' || a.status === 'cooling' ? 'disabled' : 'invalid'));
+    const statusLabel = isPlanExpired ? '已过期' : (STATUS_LABELS[a.status] || a.status);
+    const isDisabled = a.status === 'paused' || a.status === 'error' || isPlanExpired;
+
+    // Format expiry time
+    const expiryCell = a.plan_expires_at
+      ? '<span style="font-size:12px;color:' + (isPlanExpired ? '#ef4444' : '#9a9a9a') + '">' + new Date(a.plan_expires_at * 1000).toLocaleString() + '</span>'
+      : '<span style="color:#9a9a9a">—</span>';
+
+    // Email cell with "current" badge
+    const emailCell = '<span class="tok">' + (a.email || a.id.slice(0, 12)) + '</span>' +
+      (isCurrent ? ' <span class="badge badge-active" style="font-size:10px;padding:2px 6px;margin-left:4px">使用中</span>' : '');
+
+    return '<tr' + (isCurrent ? ' style="background-color:#f0f9ff"' : '') + '>' +
+      '<td>' + emailCell + '</td>' +
       '<td class="table-center"><span class="badge badge-' + statusClass + '">' + statusLabel + '</span></td>' +
       '<td>' + quotaCell(glm52, glm5turbo) + '</td>' +
+      '<td>' + expiryCell + '</td>' +
       '<td class="table-center" style="color:#8f8f8f">' + a.requests + '</td>' +
       '<td class="table-center" style="color:#9a9a9a">' + a.errors + '</td>' +
       '<td style="font-size:12px;color:#9a9a9a">' + (a.last_used_at ? new Date(a.last_used_at).toLocaleString() : '—') + '</td>' +
       '<td><div class="row-actions">' +
-        '<button onclick="toggleAccount(\\'' + a.id + '\\',\\'' + a.status + '\\')" class="row-icon-btn" title="' + (isDisabled ? '恢复' : '暂停') + '">' +
+        (!isCurrent && !isPlanExpired && a.zcode_jwt ? '<button onclick="setActiveAccount(\\'' + a.id + '\\')" class="row-icon-btn" title="设为当前"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></button>' : '') +
+        '<button onclick="toggleAccount(\\'' + a.id + '\\',\\'' + a.status + '\\')" class="row-icon-btn" title="' + (isDisabled ? '恢复' : '暂停') + '" ' + (isPlanExpired ? 'disabled style="opacity:0.3;cursor:not-allowed"' : '') + '>' +
           (isDisabled ? '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.708"/><path d="M3 4v5h5"/></svg>' : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8.5 8.5 15.5 15.5"/></svg>') +
         '</button>' +
         '<button onclick="deleteAccount(\\'' + a.id + '\\')" class="row-icon-btn row-icon-danger" title="删除"><svg viewBox="0 0 24 24"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M8 10v7"/><path d="M12 10v7"/><path d="M16 10v7"/><path d="M7 7l1 13h8l1-13"/></svg></button>' +
@@ -540,7 +641,7 @@ function switchAddTab(tab) {
 }
 
 // OAuth 登录
-let oauthFlowId = '';
+let oauthState = '';
 let oauthPolling = false;
 
 async function startOAuthLogin() {
@@ -548,7 +649,7 @@ async function startOAuthLogin() {
     const res = await fetch('api/oauth/init', { method: 'POST', headers: apiHeaders });
     const data = await res.json();
     if (data.ok) {
-      oauthFlowId = data.flow_id;
+      oauthState = data.state;
       document.getElementById('login-idle').style.display = 'none';
       document.getElementById('login-active').style.display = 'block';
       document.getElementById('login-url').value = data.authorize_url;
@@ -563,11 +664,11 @@ async function startOAuthLogin() {
 }
 
 async function startOAuthPoll() {
-  while (oauthPolling && oauthFlowId) {
+  while (oauthPolling && oauthState) {
     await new Promise(r => setTimeout(r, 2000));
     if (!oauthPolling) break;
     try {
-      const res = await fetch('api/oauth/poll', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ flow_id: oauthFlowId }) });
+      const res = await fetch('api/oauth/poll', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ state: oauthState }) });
       const data = await res.json();
       if (data.ok && data.status === 'ready') {
         oauthPolling = false;
@@ -595,7 +696,7 @@ function cancelOAuthLogin() {
 }
 
 function resetOAuthLogin() {
-  oauthFlowId = '';
+  oauthState = '';
   oauthPolling = false;
   document.getElementById('login-idle').style.display = 'block';
   document.getElementById('login-active').style.display = 'none';
@@ -636,6 +737,21 @@ async function toggleAccount(id, currentStatus) {
   await fetch('api/accounts/' + id + '/status', { method: 'POST', headers: apiHeaders, body: JSON.stringify({ status: newStatus }) });
   loadAccounts();
   showToast('账号状态已更新', 'success');
+}
+
+async function setActiveAccount(id) {
+  try {
+    const res = await fetch('api/accounts/' + id + '/set-active', { method: 'POST', headers: apiHeaders });
+    const data = await res.json();
+    if (data.ok) {
+      loadAccounts();
+      showToast('已切换到该账号', 'success');
+    } else {
+      showToast('切换失败: ' + (data.error || 'unknown error'), 'error');
+    }
+  } catch (e) {
+    showToast('切换失败: ' + e.message, 'error');
+  }
 }
 
 async function refreshAllQuota() {
@@ -687,7 +803,7 @@ setInterval(loadAccounts, 10000);
 
 // ─── Account Management Handlers ──────────────────────────────────────────────
 
-import { listAccounts, addAccount, deleteAccount, updateAccount, getSettings, updateSettings, getStats } from "./account-manager.js";
+import { listAccounts, addAccount, deleteAccount, updateAccount, getSettings, updateSettings, getStats, refreshAccountQuota } from "./account-manager.js";
 
 function handleListAccounts(): Response {
   const accounts = listAccounts();
@@ -734,6 +850,47 @@ async function handleRefreshQuota(): Promise<Response> {
   }
 }
 
+async function handleGetCurrentAccount(): Promise<Response> {
+  try {
+    const cred = await loadCredential();
+    if (!cred?.jwt) {
+      return jsonResponse(200, { current_jwt: null });
+    }
+    return jsonResponse(200, { current_jwt: cred.jwt });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
+}
+
+async function handleSetActiveAccount(id: string): Promise<Response> {
+  try {
+    const { listAccounts } = await import("./account-manager.js");
+    const accounts = listAccounts();
+    const account = accounts.find(a => a.id === id);
+
+    if (!account) {
+      return jsonResponse(404, { error: "account not found" });
+    }
+
+    if (!account.zcode_jwt) {
+      return jsonResponse(400, { error: "account has no JWT" });
+    }
+
+    // Check if plan expired
+    if (account.plan_expires_at && Date.now() >= account.plan_expires_at * 1000) {
+      return jsonResponse(400, { error: "account plan expired" });
+    }
+
+    // Save to credentials.json
+    const credForProxy: Credential = { jwt: account.zcode_jwt, provider: "zai" };
+    await saveCredential(credForProxy);
+
+    return jsonResponse(200, { ok: true, message: "Active account switched" });
+  } catch (e) {
+    return jsonResponse(500, { error: (e as Error).message });
+  }
+}
+
 function handleGetSettings(): Response {
   return jsonResponse(200, { ok: true, settings: getSettings() });
 }
@@ -748,18 +905,138 @@ async function handleUpdateSettings(req: Request): Promise<Response> {
   }
 }
 
+
+// ─── Auto Registration Handlers ──────────────────────────────────────────────
+
+type AutoregStatus = "idle" | "running" | "succeeded" | "failed";
+const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = join(SERVER_DIR, "..", "..");
+const AUTOREG_SCRIPT = join(PROJECT_ROOT, "scripts", "autoreg-flow.cjs");
+const AUTOREG_RECORD = join(PROJECT_ROOT, "data", "latest-autoreg-credential.json");
+let autoregJob: {
+  status: AutoregStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number | null;
+  error?: string;
+  email?: string;
+  accountId?: string;
+  log: string[];
+} = { status: "idle", log: [] };
+
+function appendAutoregLog(chunk: Buffer | string): void {
+  const text = String(chunk);
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    autoregJob.log.push(line);
+  }
+  if (autoregJob.log.length > 120) autoregJob.log.splice(0, autoregJob.log.length - 120);
+}
+
+async function importAutoregCredential(): Promise<{ email?: string; accountId?: string }> {
+  if (!existsSync(AUTOREG_RECORD)) throw new Error("latest-autoreg-credential.json not found");
+  const record = JSON.parse(readFileSync(AUTOREG_RECORD, "utf-8"));
+  const jwt = record.zcode_jwt;
+  if (!jwt) throw new Error("autoreg record missing zcode_jwt");
+
+  const credForProxy: Credential = {
+    jwt,
+    provider: "zai",
+    apiKey: record.platform_api_key || "",
+    userId: record.zcode_user_id,
+  } as Credential;
+  await saveCredential(credForProxy);
+
+  const existing = listAccounts().find(a => a.zcode_jwt === jwt || (record.email && a.email === record.email));
+  const patch = {
+    email: record.email,
+    zcode_jwt: jwt,
+    oauth_access_token: record.zcode_oauth_access_token,
+    user_id: record.zcode_user_id,
+    label: record.email || record.zcode_user_id || "autoreg",
+    status: "active" as const,
+  };
+  const account = existing ? updateAccount(existing.id, patch)! : addAccount(patch);
+  await refreshAccountQuota(account).catch((e) => console.error("[autoreg] quota refresh failed:", (e as Error).message));
+  return { email: record.email, accountId: account.id };
+}
+
+async function handleAutoregStart(req: Request): Promise<Response> {
+  if (autoregJob.status === "running") {
+    return jsonResponse(200, { ok: true, status: "running" });
+  }
+  if (!existsSync(AUTOREG_SCRIPT)) {
+    return jsonResponse(500, { ok: false, error: `autoreg script not found: ${AUTOREG_SCRIPT}` });
+  }
+
+  let body: any = {};
+  try { body = await req.json(); } catch {}
+  autoregJob = { status: "running", startedAt: new Date().toISOString(), log: [] };
+  const env = {
+    ...process.env,
+    DEBUG_FLOW_KEEP_OPEN_MS: String(body.keep_open_ms ?? process.env.DEBUG_FLOW_KEEP_OPEN_MS ?? 0),
+    DEBUG_FLOW_MAX_ATTEMPTS: String(body.max_attempts ?? process.env.DEBUG_FLOW_MAX_ATTEMPTS ?? 4),
+    DEBUG_FLOW_USER_DATA_DIR: String(body.user_data_dir ?? process.env.DEBUG_FLOW_USER_DATA_DIR ?? join(PROJECT_ROOT, ".playwright-user-data")),
+  };
+  const child = spawn(process.env.AUTOREG_NODE || "node", [AUTOREG_SCRIPT], { cwd: PROJECT_ROOT, env, windowsHide: false });
+  child.stdout.on("data", appendAutoregLog);
+  child.stderr.on("data", appendAutoregLog);
+  child.on("error", (e) => {
+    autoregJob.status = "failed";
+    autoregJob.error = e.message;
+    autoregJob.finishedAt = new Date().toISOString();
+  });
+  child.on("exit", async (code) => {
+    autoregJob.exitCode = code;
+    autoregJob.finishedAt = new Date().toISOString();
+    if (code === 0) {
+      try {
+        const imported = await importAutoregCredential();
+        autoregJob.status = "succeeded";
+        autoregJob.email = imported.email;
+        autoregJob.accountId = imported.accountId;
+      } catch (e) {
+        autoregJob.status = "failed";
+        autoregJob.error = (e as Error).message;
+      }
+    } else {
+      autoregJob.status = "failed";
+      autoregJob.error = `autoreg exited with code ${code}`;
+    }
+  });
+
+  return jsonResponse(202, { ok: true, status: "started" });
+}
+
+function handleAutoregStatus(): Response {
+  return jsonResponse(200, {
+    ok: true,
+    status: autoregJob.status,
+    started_at: autoregJob.startedAt,
+    finished_at: autoregJob.finishedAt,
+    exit_code: autoregJob.exitCode,
+    error: autoregJob.error,
+    email: autoregJob.email,
+    account_id: autoregJob.accountId,
+    log_tail: autoregJob.log.slice(-20).join("\n"),
+  });
+}
+
 // ─── OAuth Handlers ───────────────────────────────────────────────────────────
 
-import { initCliOAuth, pollCliOAuth, activatePlan, getBalance } from "./oauth.js";
+import { ZaiOAuthClient } from "../auth/oauth.js";
+import { activatePlan } from "./oauth.js";
+import { saveCredential, loadCredential, getStorePath } from "../auth/store.js";
+import type { Credential } from "../auth/types.js";
 
-// Store active OAuth flows
-const oauthFlows = new Map<string, { pollToken: string; expiresAt: number }>();
+const activeOAuthClients = new Map<string, { client: ZaiOAuthClient; callbackUrl: string; state: string }>();
 
 async function handleOAuthInit(): Promise<Response> {
   try {
-    const result = await initCliOAuth();
-    oauthFlows.set(result.flow_id, { pollToken: result.poll_token, expiresAt: result.expires_at * 1000 });
-    return jsonResponse(200, { ok: true, ...result });
+    const client = new ZaiOAuthClient();
+    const { authorizeUrl, callbackUrl, state } = await client.start();
+    activeOAuthClients.set(state, { client, callbackUrl, state });
+    return jsonResponse(200, { ok: true, authorize_url: authorizeUrl, callback_url: callbackUrl, state });
   } catch (e) {
     return jsonResponse(500, { error: (e as Error).message });
   }
@@ -767,43 +1044,48 @@ async function handleOAuthInit(): Promise<Response> {
 
 async function handleOAuthPoll(req: Request): Promise<Response> {
   try {
-    const body = await req.json() as any;
-    const { flow_id } = body;
-    const flow = oauthFlows.get(flow_id);
-    if (!flow) {
-      return jsonResponse(400, { error: "flow not found or expired" });
+    const body = await req.json() as { flow_id?: string; state?: string };
+    const flowState = body.flow_id || body.state;
+    if (!flowState) {
+      return jsonResponse(400, { error: "missing state" });
     }
 
-    const result = await pollCliOAuth(flow_id, flow.pollToken);
-
-    if (result.status === "ready" && result.jwt) {
-      // Activate plan and get quota
-      try {
-        await activatePlan(result.jwt);
-      } catch (e) {
-        console.error("Plan activation failed:", (e as Error).message);
-      }
-
-      // Add account
-      const account = addAccount({
-        zcode_jwt: result.jwt,
-        oauth_access_token: result.oauth_access_token,
-        user_id: result.user_id,
-        email: result.email,
-        label: result.email || result.name || "oauth",
-      });
-
-      oauthFlows.delete(flow_id);
-
-      return jsonResponse(200, {
-        ok: true,
-        status: "ready",
-        account_id: account.id,
-        email: account.email,
-      });
+    const client = activeOAuthClients.get(flowState);
+    if (!client) {
+      return jsonResponse(400, { error: "oauth flow not found or expired" });
     }
 
-    return jsonResponse(200, { ok: true, status: result.status, pending: result.status === "pending" });
+    const authCode = await client.client.waitForCallback(300_000);
+    const result = await client.client.exchangeCode(authCode, client.callbackUrl, client.state);
+
+    // Save JWT to credentials.json for proxy use
+    const credForProxy: Credential = { jwt: result.jwt, provider: "zai" };
+    try {
+      await saveCredential(credForProxy);
+      console.log(`[oauth] saved credential to ${getStorePath()}`);
+    } catch (e) {
+      console.error("[oauth] failed to save credential:", (e as Error).message);
+    }
+
+    // Activate plan and get quota
+    try { await activatePlan(result.jwt); } catch (e) { console.error("Plan activation failed:", (e as Error).message); }
+
+    // Add account to accounts.json for dashboard display
+    const account = addAccount({
+      zcode_jwt: result.jwt,
+      oauth_access_token: result.accessToken,
+      user_id: result.userId,
+      email: result.email,
+      label: result.email || result.userId || "oauth",
+    });
+
+    activeOAuthClients.delete(flowState);
+
+    return jsonResponse(200, {
+      ok: true,
+      status: "ready",
+      account_id: account.id,
+    });
   } catch (e) {
     return jsonResponse(500, { error: (e as Error).message });
   }

@@ -1,29 +1,23 @@
 /**
  * Aliyun Captcha V3 solver — in-process jsdom (single binary).
  *
- * Supports two SDK loading modes:
- * - Local: bundled as a text import (for compiled binaries)
- * - CDN: loads from alicdn (for Docker/Node.js environments)
+ * The AliyunCaptcha.js SDK is bundled as a text import (no runtime dependency
+ * on the alicdn CDN — the CDN is the #1 source of solve failures in restricted
+ * networks, and a local file path would break under `bun build --compile`).
+ * Solve attempts are retried, and errors from the SDK's `getInstance`
+ * callback are propagated rather than silently swallowed (a swallowed error
+ * there means `success`/`fail` never fires and we hang until the outer
+ * timeout rejects).
  *
- * Set CAPTCHA_SDK_MODE=cdn to use CDN loading (default for Docker).
+ * Static `import { JSDOM, VirtualConsole } from "jsdom"` (not dynamic) —
+ * dynamic `await import("jsdom")` returns a namespace `{ default: {...} }`
+ * for the CJS package under `bun build --compile`, leaving the named exports
+ * undefined. Static import lets Bun's bundler fully inline jsdom (including
+ * its internal `xhr-sync-worker.js` via `require.resolve`) into the binary,
+ * so the compiled exe has zero runtime dependency on node_modules.
  */
 import { JSDOM, VirtualConsole } from "jsdom";
-
-// SDK 加载模式：local（本地文件）或 cdn（从 CDN 加载）
-const SDK_MODE = process.env.CAPTCHA_SDK_MODE || (process.env.DOCKER_CONTAINER ? "cdn" : "local");
-const CDN_URL = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js";
-
-// 本地 SDK（仅在 local 模式下加载）
-let ALIYUN_SDK_LOCAL = "";
-if (SDK_MODE === "local") {
-  try {
-    const { readFileSync } = require("node:fs");
-    const { join } = require("node:path");
-    ALIYUN_SDK_LOCAL = readFileSync(join(__dirname, "AliyunCaptcha.js.txt"), "utf-8");
-  } catch {
-    // 文件不存在时回退到 CDN 模式
-  }
-}
+import ALIYUN_SDK_LOCAL from "./AliyunCaptcha.js.txt" with { type: "text" };
 
 const CAPTCHA_HEADER = "x-aliyun-captcha-verify-param";
 const REGION_HEADER = "x-aliyun-captcha-verify-region";
@@ -84,21 +78,10 @@ async function solveInJsdomWithRetry(cfg: FetchedCaptchaConfig): Promise<string>
 
 async function solveInJsdom(cfg: FetchedCaptchaConfig): Promise<string> {
   const vc = new VirtualConsole();
-  // 根据 SDK 加载模式选择 HTML 内容
-  let html: string;
-  if (SDK_MODE === "local" && ALIYUN_SDK_LOCAL) {
-    // 本地模式：内联 SDK
-    const sdkSafe = ALIYUN_SDK_LOCAL.replace(/<\/script>/gi, "<\\/script>");
-    html = `<!DOCTYPE html><html><head></head><body><div id="captcha-element"></div><button id="captcha-button"></button><script>${sdkSafe}</script></body></html>`;
-  } else {
-    // CDN 模式：从 CDN 加载 SDK（Docker 环境推荐）
-    html = `<!DOCTYPE html><html><head></head><body><div id="captcha-element"></div><button id="captcha-button"></button><script src="${CDN_URL}"></script></body></html>`;
-  }
-
+  const sdkSafe = ALIYUN_SDK_LOCAL.replace(/<\/script>/gi, "<\\/script>");
+  const html = `<!DOCTYPE html><html><head></head><body><div id="captcha-element"></div><button id="captcha-button"></button><script>${sdkSafe}</script></body></html>`;
   const dom = new JSDOM(html, {
-    url: "https://zcode.z.ai/", runScripts: "dangerously",
-    // CDN 模式需要启用外部资源加载
-    resources: SDK_MODE === "cdn" ? "usable" : undefined,
+    url: "https://zcode.z.ai/", runScripts: "dangerously", resources: "usable",
     pretendToBeVisual: true, virtualConsole: vc,
     beforeParse(window: any) { applyPolyfills(window); window.AliyunCaptchaConfig = { region: cfg.region, prefix: cfg.prefix }; },
   });
@@ -147,14 +130,6 @@ function waitFor(cond: () => boolean, ms: number): Promise<void> {
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function applyPolyfills(window: any): void {
   window.matchMedia = () => ({ matches: false, media: "", onchange: null, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent() { return false; } });
-
-  // 添加 crypto.subtle 支持（Docker 容器中可能缺失）
-  if (!window.crypto) window.crypto = {};
-  if (!window.crypto.subtle) {
-    // 使用 globalThis.crypto.subtle（Bun 的 Web Crypto API）
-    window.crypto.subtle = globalThis.crypto?.subtle || {};
-  }
-
   const proto = window.HTMLCanvasElement.prototype;
   proto.getContext = function (type: string) {
     if (/webgl/i.test(type)) return { canvas: this, getParameter: () => "Intel Inc.", getExtension: () => null, getSupportedExtensions: () => ["WEBGL_debug_renderer_info"], getContextAttributes: () => ({}), getShaderPrecisionFormat: () => ({ precision: 23, rangeMin: 127, rangeMax: 127 }) };
