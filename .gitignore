@@ -16,3 +16,5 @@ dist/
 .playwright-user-data/
 # Server log
 zcode-api-server.log
+
+data/
