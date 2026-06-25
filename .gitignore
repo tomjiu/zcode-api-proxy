@@ -11,7 +11,7 @@ dist/
 /zcode-proxy-linux-*
 
 # Build artifacts
-.bun-build*
+*.bun-build
 # Playwright user data
 .playwright-user-data/
 # Server log
