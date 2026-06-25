@@ -1010,8 +1010,9 @@ async function launchBrowser() {
     path.join(ZCODE_API_ROOT, ".playwright-user-data");
   fs.mkdirSync(userDataDir, { recursive: true });
   console.log(`  Browser profile: ${userDataDir}`);
+  const headless = process.env.DEBUG_FLOW_HEADLESS === "0" ? false : true;
   const context = await chromium.launchPersistentContext(userDataDir, {
-    headless: false,
+    headless,
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     viewport: { width: 1280, height: 800 },
@@ -2097,4 +2098,6 @@ async function main() {
 main().catch((e) => {
   console.error(e);
   process.exit(1);
+}).finally(() => {
+  setTimeout(() => process.exit(0), 500);
 });
