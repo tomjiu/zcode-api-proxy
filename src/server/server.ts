@@ -157,6 +157,9 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
     if (path === "/api/autoreg/start" && method === "POST") {
       return handleAutoregStart(req);
     }
+    if (path === "/api/autoreg/stop" && method === "POST") {
+      return handleAutoregStop();
+    }
     if (path === "/api/autoreg/status" && method === "GET") {
       return handleAutoregStatus();
     }
@@ -325,11 +328,18 @@ function getDashboardHTML(config: ProxyConfig, metrics: { getStats: () => { upti
     </div>
     <div class="page-actions">
       <span class="live-dot">实时监控中</span>
-      <button onclick="startAutoRegister()" id="autoreg-btn" class="page-action-btn page-action-btn-primary">
-        <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-        一键自动注册
-      </button>
-      <span id="autoreg-status" class="section-meta"></span>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="number" id="autoreg-count" value="1" min="1" max="20" class="input" style="width:50px;height:30px;text-align:center;font-size:13px" title="注册数量">
+        <button onclick="startAutoRegister()" id="autoreg-btn" class="page-action-btn page-action-btn-primary">
+          <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+          自动注册
+        </button>
+        <button onclick="stopAutoRegister()" id="autoreg-stop-btn" class="page-action-btn" style="display:none">
+          <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+          停止
+        </button>
+        <span id="autoreg-status" class="section-meta"></span>
+      </div>
       <button onclick="refreshAllQuota()" class="page-action-btn">
         <svg width="14" height="14" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" fill="none"><path d="M20 11a8 8 0 0 0-14.6-4.6"/><path d="M4 4v5h5"/><path d="M4 13a8 8 0 0 0 14.6 4.6"/><path d="M20 20v-5h-5"/></svg>
         刷新额度
@@ -490,21 +500,30 @@ const apiHeaders = API_KEY ? {'Authorization': 'Bearer ' + API_KEY, 'Content-Typ
 
 
 let autoRegPolling = false;
+let autoRegCompleted = 0;
+let autoRegTotal = 0;
 async function startAutoRegister() {
-  const btn = document.getElementById('autoreg-btn');
-  if (btn) btn.disabled = true;
-  setAutoRegStatus('启动中...');
+  autoRegTotal = parseInt(document.getElementById('autoreg-count').value) || 1;
+  autoRegCompleted = 0;
+  if (autoRegTotal < 1) autoRegTotal = 1;
+  document.getElementById('autoreg-btn').disabled = true;
+  document.getElementById('autoreg-stop-btn').style.display = 'inline-flex';
+  document.getElementById('autoreg-count').disabled = true;
+  setAutoRegStatus('0/' + autoRegTotal + ' 启动中...');
+  autoRegPolling = true;
   try {
     const res = await fetch('api/autoreg/start', { method: 'POST', headers: apiHeaders, body: JSON.stringify({}) });
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || '启动失败');
-    showToast(data.status === 'running' ? '自动注册已在运行' : '自动注册已启动', 'info');
-    autoRegPolling = true;
+    showToast('自动注册已启动', 'info');
     pollAutoRegister();
   } catch (e) {
-    if (btn) btn.disabled = false;
+    document.getElementById('autoreg-btn').disabled = false;
+    document.getElementById('autoreg-stop-btn').style.display = 'none';
+    document.getElementById('autoreg-count').disabled = false;
+    autoRegPolling = false;
     setAutoRegStatus('');
-    showToast('自动注册启动失败: ' + e.message, 'error');
+    showToast('启动失败: ' + e.message, 'error');
   }
 }
 async function pollAutoRegister() {
@@ -514,27 +533,62 @@ async function pollAutoRegister() {
       const res = await fetch('api/autoreg/status', { headers: apiHeaders });
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || '状态查询失败');
-      const tail = (data.log_tail || '').split('\n').filter(Boolean).slice(-1)[0] || '';
-      setAutoRegStatus(data.status + (tail ? ' · ' + tail.slice(0, 80) : ''));
       if (data.status === 'succeeded') {
-        autoRegPolling = false;
-        document.getElementById('autoreg-btn').disabled = false;
-        setAutoRegStatus('完成：' + (data.email || '已写入凭据'));
-        showToast('自动注册完成，账号已添加并设为当前。', 'success');
+        autoRegCompleted++;
         loadAccounts();
         refreshAllQuota();
-        return;
+        const done = autoRegCompleted >= autoRegTotal;
+        if (done) {
+          autoRegPolling = false;
+          document.getElementById('autoreg-btn').disabled = false;
+          document.getElementById('autoreg-stop-btn').style.display = 'none';
+          document.getElementById('autoreg-count').disabled = false;
+          setAutoRegStatus('');
+          showToast('自动注册完成 (' + autoRegCompleted + '/' + autoRegTotal + ')', 'success');
+          return;
+        }
+        // Start next registration
+        setAutoRegStatus(autoRegCompleted + '/' + autoRegTotal + ' 启动下一个...');
+        const res2 = await fetch('api/autoreg/start', { method: 'POST', headers: apiHeaders, body: JSON.stringify({}) });
+        const data2 = await res2.json();
+        if (!data2.ok) throw new Error(data2.error || '启动失败');
+        continue;
+      }
+      if (data.status === 'running') {
+        const tail = (data.log_tail || '').split('\\n').filter(Boolean).slice(-1)[0] || '';
+        setAutoRegStatus(autoRegCompleted + '/' + autoRegTotal + ' 运行中' + (tail ? ' · ' + tail.slice(0, 80) : ''));
+        continue;
       }
       if (data.status === 'failed') {
-        autoRegPolling = false;
-        document.getElementById('autoreg-btn').disabled = false;
-        showToast('自动注册失败: ' + (data.error || tail || '未知错误'), 'error');
-        return;
+        autoRegCompleted++;
+        showToast('自动注册失败: ' + (data.error || '错误'), 'error');
+        // Try next if more remaining
+        if (autoRegCompleted >= autoRegTotal) {
+          autoRegPolling = false;
+          document.getElementById('autoreg-btn').disabled = false;
+          document.getElementById('autoreg-stop-btn').style.display = 'none';
+          document.getElementById('autoreg-count').disabled = false;
+          setAutoRegStatus('');
+          return;
+        }
+        setAutoRegStatus(autoRegCompleted + '/' + autoRegTotal + ' 继续下一个...');
+        const res2 = await fetch('api/autoreg/start', { method: 'POST', headers: apiHeaders, body: JSON.stringify({}) });
+        const data2 = await res2.json();
+        if (!data2.ok) throw new Error(data2.error || '启动失败');
       }
     } catch (e) {
       console.warn(e);
     }
   }
+}
+function stopAutoRegister() {
+  autoRegPolling = false;
+  fetch('api/autoreg/stop', { method: 'POST', headers: apiHeaders }).catch(function(){});
+  document.getElementById('autoreg-btn').disabled = false;
+  document.getElementById('autoreg-stop-btn').style.display = 'none';
+  document.getElementById('autoreg-count').disabled = false;
+  setAutoRegStatus('已停止');
+  showToast('自动注册已停止', 'info');
 }
 function setAutoRegStatus(text) {
   const el = document.getElementById('autoreg-status');
@@ -922,6 +976,7 @@ let autoregJob: {
   email?: string;
   accountId?: string;
   log: string[];
+  child?: any;
 } = { status: "idle", log: [] };
 
 function appendAutoregLog(chunk: Buffer | string): void {
@@ -961,6 +1016,14 @@ async function importAutoregCredential(): Promise<{ email?: string; accountId?: 
   return { email: record.email, accountId: account.id };
 }
 
+async function handleAutoregStop(): Promise<Response> {
+  if (autoregJob.child) {
+    try { autoregJob.child.kill(); } catch (e) { /* ignore */ }
+  }
+  autoregJob = { status: "idle", log: [] } as any;
+  return jsonResponse(200, { ok: true, message: "stopped" });
+}
+
 async function handleAutoregStart(req: Request): Promise<Response> {
   if (autoregJob.status === "running") {
     return jsonResponse(200, { ok: true, status: "running" });
@@ -979,6 +1042,7 @@ async function handleAutoregStart(req: Request): Promise<Response> {
     DEBUG_FLOW_USER_DATA_DIR: String(body.user_data_dir ?? process.env.DEBUG_FLOW_USER_DATA_DIR ?? join(PROJECT_ROOT, ".playwright-user-data")),
   };
   const child = spawn(process.env.AUTOREG_NODE || "node", [AUTOREG_SCRIPT], { cwd: PROJECT_ROOT, env, windowsHide: false });
+  autoregJob.child = child;
   child.stdout.on("data", appendAutoregLog);
   child.stderr.on("data", appendAutoregLog);
   child.on("error", (e) => {
