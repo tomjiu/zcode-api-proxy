@@ -74,6 +74,7 @@ export async function proxyRequest(
   let cred;
   try {
     cred = await auth.getCredential();
+    console.log(`${reqId} credential loaded: provider=${cred.provider}, hasJWT=${!!cred.jwt}, hasApiKey=${!!cred.apiKey}, jwt=${cred.jwt?.substring(0, 30)}...`);
   } catch (err) {
     if (debug) debugError(reqId, "credential_unavailable", (err as Error).message);
     printRow(reqId, format, meta, 503, started, Date.now(), 0, 0, 0);
@@ -134,9 +135,49 @@ export async function proxyRequest(
   }
 
   if (upstreamResp.status === 401 && config.plan === "start-plan") {
-    if (debug) debugError(reqId, "start_plan_jwt_invalid", "JWT rejected upstream");
-    printRow(reqId, format, meta, 401, started, headersAt, 0, 0, 0);
-    return errorResponse(401, "start_plan_jwt_invalid", "Start-plan JWT was rejected. Re-run: zcode-proxy auth login");
+    if (debug) debugLine(reqId, "401/jwt rejected — attempting renewal and retry once");
+    try { upstreamResp.body?.cancel(); } catch {}
+    console.log(`${reqId} JWT rejected (401), attempting renewal... (current cred has jwt: ${!!cred.jwt})`);
+
+    // Force renewal by marking current cred as expired and re-calling getCredential
+    try {
+      // Create expired credential to trigger renewal logic
+      const expiredCred = {
+        provider: cred.provider,
+        jwt: cred.jwt,
+        apiKey: cred.apiKey,
+        secret: cred.secret,
+        userId: cred.userId,
+        expiresAt: Date.now() - 1,
+      };
+      console.log(`${reqId} Setting expired cred with jwt: ${!!expiredCred.jwt}`);
+      auth.setOAuthCredential(expiredCred);
+      const freshCred = await auth.getCredential();
+
+      console.log(`${reqId} JWT renewed successfully`);
+
+      // Rebuild and retry with fresh JWT
+      upstreamReq = buildUpstreamRequest(clientReq, upstreamFormat, provider, freshCred, transformedBody, config.identity, config.plan, captchaHeaders);
+      upstreamResp = await fetchImpl(upstreamReq, translateMode ? {} : { decompress: false }).catch((err: Error) => {
+        if (debug) debugError(reqId, "upstream_unreachable", err.message);
+        printRow(reqId, format, meta, 502, started, Date.now(), 0, 0, 0);
+        return errorResponse(502, "upstream_unreachable", err.message);
+      });
+
+      if (debug) debugLine(reqId, `← retry ${upstreamResp.status} ${upstreamResp.statusText}`);
+
+      // If still 401 after renewal, give up
+      if (upstreamResp.status === 401) {
+        if (debug) debugError(reqId, "start_plan_jwt_invalid", "JWT still rejected after renewal");
+        printRow(reqId, format, meta, 401, started, Date.now(), 0, 0, 0);
+        return errorResponse(401, "start_plan_jwt_invalid", "Start-plan JWT was rejected even after auto-renewal. Re-run: zcode-proxy auth login");
+      }
+    } catch (renewErr) {
+      console.error(`${reqId} JWT renewal failed:`, (renewErr as Error).message);
+      if (debug) debugError(reqId, "start_plan_jwt_invalid", "JWT renewal failed");
+      printRow(reqId, format, meta, 401, started, Date.now(), 0, 0, 0);
+      return errorResponse(401, "start_plan_jwt_invalid", "Start-plan JWT was rejected and auto-renewal failed. Re-run: zcode-proxy auth login");
+    }
   }
 
   // start-plan: on 403 captcha challenge, force re-solve and retry once

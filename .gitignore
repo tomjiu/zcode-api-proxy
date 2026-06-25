@@ -9,3 +9,10 @@ dist/
 /_reverse
 /zcode-proxy.exe
 /zcode-proxy-linux-*
+
+# Build artifacts
+.bun-build*
+# Playwright user data
+.playwright-user-data/
+# Server log
+zcode-api-server.log

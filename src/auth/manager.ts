@@ -5,6 +5,7 @@
 import type { AuthMode, Credential } from "./types.js";
 import { createApiKeyCredential } from "./apikey.js";
 import type { ProviderId } from "../provider/types.js";
+import { renewJWT, type RenewalContext } from "./renewer.js";
 
 /** Options for constructing an `AuthManager`. */
 interface AuthManagerOptions {
@@ -18,13 +19,15 @@ interface AuthManagerOptions {
  * Resolves the upstream credential to inject into proxied requests.
  *
  * In `apikey` mode: returns a static credential parsed from the config string.
- * In `oauth` mode: throws "not implemented" until T9/T10 land.
+ * In `oauth` mode: returns the OAuth credential, auto-renewing if expired.
  */
 export class AuthManager {
   private mode: AuthMode;
   private provider: ProviderId;
   private cachedApiKeyCred: Credential | null = null;
   private oauthCred: Credential | null = null;
+  private renewalContext: RenewalContext | null = null;
+  private renewalInProgress: Promise<Credential | null> | null = null;
 
   constructor(opts: AuthManagerOptions) {
     this.mode = opts.mode;
@@ -43,13 +46,34 @@ export class AuthManager {
 
     // oauth mode
     if (this.oauthCred) {
+      // Check if expired
       if (this.oauthCred.expiresAt && Date.now() >= this.oauthCred.expiresAt) {
+        // JWT expired, attempt auto-renewal
+        if (this.renewalInProgress) {
+          // Another request is already renewing, wait for it
+          const fresh = await this.renewalInProgress;
+          if (fresh) return fresh;
+          throw new Error("JWT renewal in progress failed");
+        }
+
+        // Start renewal
+        this.renewalInProgress = this.attemptRenewal();
+        const fresh = await this.renewalInProgress;
+        this.renewalInProgress = null;
+
+        if (fresh) {
+          this.oauthCred = fresh;
+          return fresh;
+        }
+
+        // Renewal failed
         this.oauthCred = null;
-        throw new Error("OAuth credential expired; re-authentication required (T9/T10 not yet implemented)");
+        throw new Error("OAuth credential expired and auto-renewal failed. Re-run: zcode-proxy auth login");
       }
+
       return this.oauthCred;
     }
-    throw new Error("OAuth credential not available — run login flow first (T9/T10 not yet implemented)");
+    throw new Error("OAuth credential not available — run login flow first");
   }
 
   /** Set the OAuth credential (used by T9/T10 OAuth flow). */
@@ -57,8 +81,20 @@ export class AuthManager {
     this.oauthCred = cred;
   }
 
+  /** Set renewal context (oauth access token, credential path) */
+  setRenewalContext(ctx: RenewalContext): void {
+    this.renewalContext = ctx;
+  }
+
   /** Current auth mode. */
   getMode(): AuthMode {
     return this.mode;
+  }
+
+  private async attemptRenewal(): Promise<Credential | null> {
+    if (!this.oauthCred || !this.renewalContext) {
+      return null;
+    }
+    return await renewJWT(this.oauthCred, this.renewalContext);
   }
 }

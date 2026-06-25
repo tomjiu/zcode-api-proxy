@@ -14,6 +14,7 @@ export interface Account {
   oauth_access_token?: string;
   user_id?: string;
   label?: string;
+  api_key?: string;
   status: "active" | "paused" | "error" | "exhausted" | "cooling";
   plan_expires_at?: number;
   quota_details?: Array<{
@@ -296,22 +297,42 @@ export function startQuotaMonitor() {
     return;
   }
 
-  console.log(`[quota] starting quota monitor, interval=${interval}s`);
+  console.log(`[quota] starting quota monitor, interval=${interval}s (active account: 10s)`);
 
-  // 启动后延迟 5 秒，避免与服务启动争抢
+  // 两个定时器：当前账户10秒刷新，其他账户60秒刷新
+  let activeAccountTimer: NodeJS.Timeout | null = null;
+  let allAccountsTimer: NodeJS.Timeout | null = null;
+
+  // 当前账户快速刷新（10秒）
+  setTimeout(async () => {
+    while (true) {
+      try {
+        const currentJWT = await getCurrentCredentialJWT();
+        if (currentJWT) {
+          const account = load().accounts.find(a => a.zcode_jwt === currentJWT);
+          if (account && account.status !== "paused" && account.status !== "error") {
+            await refreshAccountQuota(account);
+            save(load());
+          }
+        }
+      } catch (e) {
+        console.error(`[quota] active account refresh error: ${(e as Error).message}`);
+      }
+      await new Promise((r) => setTimeout(r, 10000)); // 10秒
+    }
+  }, 3000);
+
+  // 所有账户慢速刷新（60秒）
   setTimeout(async () => {
     while (true) {
       const currentInterval = load().settings.quota_refresh_interval || 60;
       if (currentInterval <= 0) {
-        // 关闭：仍周期性检查设置，便于随时启用
         await new Promise((r) => setTimeout(r, 30000));
         continue;
       }
 
-      // 检查冷却账户
       checkCoolingAccounts();
 
-      // 刷新额度
       try {
         const accounts = load().accounts.filter(
           (a) => a.zcode_jwt && a.status !== "paused" && a.status !== "error"
@@ -327,6 +348,16 @@ export function startQuotaMonitor() {
       await new Promise((r) => setTimeout(r, currentInterval * 1000));
     }
   }, 5000);
+}
+
+async function getCurrentCredentialJWT(): Promise<string | null> {
+  try {
+    const { loadCredential } = await import("../auth/store.js");
+    const cred = await loadCredential();
+    return cred?.jwt || null;
+  } catch {
+    return null;
+  }
 }
 
 /**

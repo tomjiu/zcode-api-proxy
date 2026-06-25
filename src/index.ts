@@ -17,6 +17,36 @@ import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
+function resolvePath(p: string): string {
+  if (p.startsWith("~/") || p === "~") {
+    return join(homedir(), p.slice(2));
+  }
+  return p;
+}
+
+/**
+ * Get plan expiry time for a JWT from accounts.json.
+ * For start-plan, JWT validity is tied to plan_expires_at.
+ */
+function getPlanExpiryFromAccountsPool(jwt: string): number | undefined {
+  try {
+    const accountsPath = join(homedir(), ".zcode-proxy", "accounts.json");
+    if (!existsSync(accountsPath)) return undefined;
+
+    const raw = readFileSync(accountsPath, "utf-8");
+    const store = JSON.parse(raw) as { accounts: Array<{ zcode_jwt?: string; plan_expires_at?: number }> };
+
+    const account = store.accounts?.find(a => a.zcode_jwt === jwt);
+    if (account?.plan_expires_at) {
+      return account.plan_expires_at * 1000; // Convert to ms
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const VERSION = "2.0.1";
 
 if (import.meta.main) main();
@@ -104,12 +134,33 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
   });
 
   if (config.auth.mode === "oauth") {
-    const cred = await loadCredential();
+    const credPath = (config.auth as any).oauthCredentialsPath
+      ? resolvePath((config.auth as any).oauthCredentialsPath)
+      : undefined;
+    let cred = await loadCredential(credPath);
     if (!cred) {
-      console.error("Not logged in. Run: zcode-proxy auth login " + config.provider);
-      process.exit(1);
+      console.log("No local credential found, importing from ZCode config...");
+      try {
+        cred = importFromZCodeConfig(config.provider);
+        const storePath = credPath ?? getStorePath();
+        await saveCredential(cred, storePath);
+        console.log(`  Imported and saved to ${storePath}`);
+      } catch (e) {
+        console.error("Not logged in. Run: zcode-proxy auth login " + config.provider);
+        console.error(`Import failed: ${(e as Error).message}`);
+        process.exit(1);
+      }
     }
+
+    // Set expiry if not present (for start-plan, use plan_expires_at from accounts.json)
+    if (cred.jwt && !cred.expiresAt && config.plan === "start-plan") {
+      cred.expiresAt = getPlanExpiryFromAccountsPool(cred.jwt);
+    }
+
     auth.setOAuthCredential(cred);
+
+    // Enable auto-renewal by providing renewal context
+    auth.setRenewalContext({ credentialPath: credPath });
   }
 
   if (debug) printDebugBanner(config, path);
